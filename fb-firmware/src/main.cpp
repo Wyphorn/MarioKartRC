@@ -519,6 +519,7 @@ bool handleState(bool b1p, bool b4p, bool b2, bool b3,
                     menuSel = 0;
                     calHoldStart = 0;
                     displayMenu();
+                    return false;
                 }
             } else {
                 calHoldStart = 0;

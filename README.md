@@ -178,7 +178,8 @@ Noch nicht begonnen. Geplante Komponenten:
 | FB-Firmware: Joystick-Kalibrierung + EEPROM | ✅ |
 | FB-Firmware: Einstellungsmenü (Kalibrierung, Trim, Speed, Sprache) | ✅ |
 | FB-Firmware: Peripherie-Guards (bootet ohne Hardware) | ✅ |
-| Display wechseln: 2.42" SSD1309 128×64 | ⏳ |
+| FB-Firmware: Einstellungsmenü-Bug (STATE_READY→MENU) | ✅ |
+| Display wechseln: 2.42" SSD1309 128×64 I2C | 🚚 bestellt |
 | Race-Display: Sprite, Position, Runde, Item | ⏳ |
 | 3-Position Modus-Schalter (Hardware) | ⏳ |
 | ESP-NOW implementieren (FB) | ⏳ |
