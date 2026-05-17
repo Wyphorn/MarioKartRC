@@ -104,10 +104,13 @@ void calibrate() {
     saveCalibration();
 }
 
+#define JS_DEADZONE 5
+
 int16_t mapJS(int16_t raw, int ch) {
     int32_t v = ((int32_t)raw - jsCenter[ch]) * 100 / JS_SCALE;
     if (v > 100) v = 100;
     if (v < -100) v = -100;
+    if (v > -JS_DEADZONE && v < JS_DEADZONE) v = 0;
     return (int16_t)v;
 }
 
@@ -182,9 +185,9 @@ void displayCalibrating() {
 }
 
 // Gibt true zurück wenn die FB normal bedienbar ist
-bool handleState(bool b1, bool b2) {
+bool handleState(bool b2, bool b3) {
     unsigned long now = millis();
-    bool combo = b1 && b2;
+    bool combo = b2 && b3;
 
     switch (state) {
         case STATE_READY:
@@ -268,7 +271,7 @@ void loop() {
     bool b3 = !digitalRead(PIN_BTN3);
     bool b4 = !digitalRead(PIN_BTN4);
 
-    bool active = handleState(b1, b2);
+    bool active = handleState(b2, b3);
 
     if (!active) {
         delay(100);
@@ -278,15 +281,17 @@ void loop() {
     handleRumble();
     handleSerial();
 
-    int16_t lx = mapJS(ads.readADC_SingleEnded(JS_LEFT_X), JS_LEFT_X);
-    int16_t ly = mapJS(ads.readADC_SingleEnded(JS_LEFT_Y), JS_LEFT_Y);
-    int16_t rx = mapJS(ads.readADC_SingleEnded(JS_RIGHT_X), JS_RIGHT_X);
-    int16_t ry = mapJS(ads.readADC_SingleEnded(JS_RIGHT_Y), JS_RIGHT_Y);
+    int16_t rawLX = ads.readADC_SingleEnded(JS_LEFT_X);
+    int16_t rawLY = ads.readADC_SingleEnded(JS_LEFT_Y);
+    int16_t rawRX = ads.readADC_SingleEnded(JS_RIGHT_X);
+    int16_t rawRY = ads.readADC_SingleEnded(JS_RIGHT_Y);
 
-    Serial.printf("LX:%4d | LY:%4d | RX:%4d | RY:%4d | B1:%d B2:%d B3:%d B4:%d\n",
-        lx, ly, rx, ry, b1, b2, b3, b4);
+    Serial.printf("LX:%6d | LY:%6d | RX:%6d | RY:%6d | B1:%d B2:%d B3:%d B4:%d\n",
+        rawLX, rawLY, rawRX, rawRY, b1, b2, b3, b4);
 
-    updateDisplay(lx, ly, rx, ry, b1, b2, b3, b4);
+    updateDisplay(mapJS(rawLX, JS_LEFT_X), mapJS(rawLY, JS_LEFT_Y),
+                  mapJS(rawRX, JS_RIGHT_X), mapJS(rawRY, JS_RIGHT_Y),
+                  b1, b2, b3, b4);
 
     delay(100);
 }
