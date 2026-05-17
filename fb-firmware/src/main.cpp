@@ -91,6 +91,8 @@ bool loadCalibration() {
     return true;
 }
 
+#define JS_DEADZONE 5
+
 void calibrate() {
     int32_t sum[4] = {};
     for (int i = 0; i < 10; i++) {
@@ -103,8 +105,6 @@ void calibrate() {
     Serial.printf("[CAL] %d %d %d %d\n", jsCenter[0], jsCenter[1], jsCenter[2], jsCenter[3]);
     saveCalibration();
 }
-
-#define JS_DEADZONE 5
 
 int16_t mapJS(int16_t raw, int ch) {
     int32_t v = ((int32_t)raw - jsCenter[ch]) * 100 / JS_SCALE;
