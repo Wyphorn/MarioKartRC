@@ -47,7 +47,7 @@ Die Fernbedienung unterstützt zwei Modi, wählbar über den 3-Position-Schalter
 | MCU | D1 Mini (ESP8266) |
 | Joysticks | 2x PS2-Analog-Stick (5V VCC) |
 | ADC | ADS1115, I2C 0x48 |
-| Display | SSD1306 OLED 128×64, I2C 0x3C |
+| Display | SSD1306 OLED 128×64, I2C 0x3C (Breadboard); geplant: 2.42" SSD1309 |
 | Buttons | 4x Taster |
 | Status-LED | WS2812B RGB |
 | Rumble | Coin-ERM-Vibrationsmotor 10mm (1034-Typ), 5V |
@@ -111,12 +111,19 @@ Motor rot→5V | blau→Kollektor. 220µF Elko auf 5V-Rail gegen Spannungseinbr�
 | 🟡 Gelb pulsierend | Kalibrierung ausgelöst (B2+B3 3s halten) |
 | 🟡 Gelb solid | Kalibrierung läuft – FB gesperrt (mind. 3s) |
 
-### Joystick-Kalibrierung
+### Einstellungsmenü
 
-Beim ersten Start kalibriert die FB automatisch (Joysticks losgelassen halten).
-Werte werden im EEPROM gespeichert und bleiben über Neustarts erhalten.
-Manuelle Neukalibrierung: **B2 + B3 gleichzeitig 3 Sekunden halten**.
-Ausgabe: –100 … +100 pro Achse, Dead Zone ±5.
+**B2 + B3 gleichzeitig 3 Sekunden halten** öffnet das Menü. Navigation per Joystick (hoch/runter), B1 bestätigen, B4 zurück.
+
+| Menüpunkt | Funktion |
+|---|---|
+| Offset-Kalibrierung | Nullpunkt setzen (Joysticks loslassen, läuft automatisch) |
+| Min/Max-Kalibrierung | 8 Schritte geführt: jeden Stick in jede Richtung durchdrücken, B1 bestätigen |
+| Servo-Trim | ±10 Stufen, EEPROM-persistent |
+| Max. Speed | 1–10 Stufen (10 = 100 %), temporär |
+| Sprache | Deutsch / English |
+
+Beim ersten Start wird automatisch eine Offset-Kalibrierung durchgeführt (Joysticks in Ruhestellung lassen). Ausgabe: –100 … +100 pro Achse, Dead Zone ±5.
 
 ### OLED-Display
 
@@ -169,6 +176,10 @@ Noch nicht begonnen. Geplante Komponenten:
 | FB-Firmware: Joysticks, Buttons, Rumble, OLED | ✅ |
 | FB-Firmware: WS2812B Status-LED | ✅ |
 | FB-Firmware: Joystick-Kalibrierung + EEPROM | ✅ |
+| FB-Firmware: Einstellungsmenü (Kalibrierung, Trim, Speed, Sprache) | ✅ |
+| FB-Firmware: Peripherie-Guards (bootet ohne Hardware) | ✅ |
+| Display wechseln: 2.42" SSD1309 128×64 | ⏳ |
+| Race-Display: Sprite, Position, Runde, Item | ⏳ |
 | 3-Position Modus-Schalter (Hardware) | ⏳ |
 | ESP-NOW implementieren (FB) | ⏳ |
 | Daten-Struct FB ↔ Auto definieren | ⏳ |
@@ -196,3 +207,4 @@ Noch nicht begonnen. Geplante Komponenten:
 | D4 für Rumble | UART1-Interferenz auf GPIO2 |
 | D8 für Button 4 | GPIO15 Pull-Down, INPUT_PULLUP funktioniert nicht |
 | 3.3V für Rumble-Motor | Zu schwach, jetzt 5V |
+| Farb-TFT (ILI9341/ST7789) für Race-Display | Hardware-SPI-Pins durch Buttons belegt; stattdessen größeres OLED gleicher Auflösung |
