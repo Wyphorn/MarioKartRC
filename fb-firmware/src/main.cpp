@@ -249,7 +249,9 @@ uint8_t langTemp      = LANG_DE;
 int16_t jsMinTemp[4];
 int16_t jsMaxTemp[4];
 
-// --- ESP-NOW Globals ---
+// ──────────────────────────────────────────────
+// ESP-NOW Globals
+// ──────────────────────────────────────────────
 #define BEACON_INTERVAL_MS        500
 #define FEEDBACK_TIMEOUT_MS      2000
 #define SAVED_CHANNEL_TIMEOUT_MS 5000
@@ -725,6 +727,8 @@ int8_t jsMenuX(int16_t rawLX, int16_t rawRX) {
     return 0;
 }
 
+void sendConfigPacket();  // forward declaration (definiert im ESP-NOW-Block)
+
 // ──────────────────────────────────────────────
 // State Machine
 // *P = Tastendruck (Flanke); bGreen/bBlue zusätzlich als Rohzustand für Combo
@@ -867,7 +871,7 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
                 trimTemp = constrain(trimTemp + dir, TRIM_MIN, TRIM_MAX);
                 displayTrimBar(trimTemp);
             }
-            if (bYellowP) { servoTrim = trimTemp; saveSettings(); state = STATE_MENU; displayMenu(); }
+            if (bYellowP) { servoTrim = trimTemp; saveSettings(); sendConfigPacket(); state = STATE_MENU; displayMenu(); }
             if (bRedP) { state = STATE_MENU; displayMenu(); }
             return false;
         }
@@ -1034,6 +1038,13 @@ void sendControlInput(int8_t throttle, int8_t steering,
     pkt.steering = steering;
     pkt.buttons  = (bY ? MK_BTN_YELLOW : 0) | (bG ? MK_BTN_GREEN : 0) | (bB ? MK_BTN_BLUE : 0) | (bR ? MK_BTN_RED : 0);
     pkt.maxSpeed = min((uint8_t)maxSpeed, feedback.speedLimit);
+    esp_now_send(peerMac, (uint8_t*)&pkt, sizeof(pkt));
+}
+
+void sendConfigPacket() {
+    if (!paired) return;
+    MK_ConfigPacket pkt;
+    pkt.trim = servoTrim;
     esp_now_send(peerMac, (uint8_t*)&pkt, sizeof(pkt));
 }
 

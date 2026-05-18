@@ -114,6 +114,8 @@ struct MK_ControlInput {
 // Car stores values in its own EEPROM and applies them immediately.
 // Routing is transparent: car behaves identically whether packet
 // arrives directly from FB (Direct Mode) or forwarded by base (Game Mode).
+// Base MUST forward MK_ConfigPacket unicast to the paired car — it is not
+// consumed by the base itself.
 
 struct MK_ConfigPacket {
     uint8_t type = MSG_CONFIG;
