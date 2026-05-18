@@ -82,12 +82,12 @@ struct MK_GameFeedback {
 // Pairing works identically in both modes — the car does not need to know the mode.
 //
 // Game Mode:
-//   Car broadcasts MK_Beacon → Base station (DEADBEEF:BA5E) responds with MK_Assign.
+//   Car sends MK_Beacon (unicast to MK_BASE_MAC) → Base station (DEADBEEF:BA5E) responds with MK_Assign.
 //   Car sends all future packets to baseMac (= real base station MAC).
 //
 // Direct Mode:
 //   FB temporarily spoofs MAC to DEADBEEF:BA5E on boot.
-//   Car broadcasts MK_Beacon → FB (acting as base) responds with MK_Assign,
+//   Car sends MK_Beacon (unicast to MK_BASE_MAC) → FB (acting as base) responds with MK_Assign,
 //   baseMac set to FB's real MAC.
 //   FB then restores its real MAC.
 //   Car sends all future packets to baseMac (= FB's real MAC) — direct link established.

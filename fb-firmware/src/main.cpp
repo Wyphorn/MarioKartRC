@@ -4,6 +4,12 @@
 #include <Adafruit_ADS1X15.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_NeoPixel.h>
+#include <ESP8266WiFi.h>
+extern "C" {
+    #include <espnow.h>
+    #include <user_interface.h>
+}
+#include "mk_protocol.h"
 
 // --- Pins ---
 #define PIN_RUMBLE  D8
@@ -109,6 +115,8 @@ struct Strings {
     const char* rumbleOff;
     const char* swapOn;
     const char* swapOff;
+    const char* connectingDirect;  // "Warte auf Auto"
+    const char* connectingGame;    // "Verbinde mit Basis"
 };
 
 const Strings STRINGS[LANG_COUNT] = {
@@ -141,7 +149,8 @@ const Strings STRINGS[LANG_COUNT] = {
         "Reset",
         "Werte zurueckgesetzt",
         "An", "Aus",
-        "An", "Aus"
+        "An", "Aus",
+        "Warte auf Auto", "Verbinde mit Basis"
     },
     // LANG_EN
     {
@@ -172,7 +181,8 @@ const Strings STRINGS[LANG_COUNT] = {
         "Reset",
         "Values reset",
         "On", "Off",
-        "On", "Off"
+        "On", "Off",
+        "Waiting for car", "Connecting to base"
     }
 };
 
@@ -247,9 +257,12 @@ void ledPulseYellow() {
     uint8_t  v = (t < 300) ? (t * 60 / 300) : ((600 - t) * 60 / 300);
     setLed(v, v, 0);
 }
-void ledRedBlink() { uint8_t v = ((millis() / 500) % 2) ? 60 : 0; setLed(v, 0, 0); }
-void ledOrange()   { setLed(60, 20, 0); }
-void ledPink()     { setLed(60, 0, 40); }
+void ledRedBlink()    { uint8_t v = ((millis() / 500) % 2) ? 60 : 0; setLed(v, 0, 0); }
+void ledOrange()      { setLed(60, 20, 0); }
+void ledPink()        { setLed(60, 0, 40); }
+void ledBlue()        { setLed(0, 0, 60); }
+void ledPulseOrange() { uint8_t v = ((millis() / 300) % 2) ? 60 : 0; setLed(v, v/3, 0); }
+void ledPulseBlue()   { uint8_t v = ((millis() / 300) % 2) ? 60 : 0; setLed(0, 0, v); }
 void ledReady() {
     if      (batPct <= BAT_CRIT_PCT) ledRedBlink();
     else if (batPct <= BAT_LOW_PCT)  ledOrange();
@@ -424,6 +437,18 @@ void displayNormal(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
 // ──────────────────────────────────────────────
 // Display: Menü
 // ──────────────────────────────────────────────
+void displayConnecting() {
+    if (!dispOK) return;
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    const char* msg = (fbMode == MODE_DIRECT) ? S().connectingDirect : S().connectingGame;
+    display.setCursor((128 - (int)strlen(msg) * 6) / 2, 28);
+    display.print(msg);
+    drawBatteryIcon(batPct);
+    display.display();
+}
+
 void displayMenu() {
     if (!dispOK) return;
     display.clearDisplay();
@@ -626,6 +651,7 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
                     state = STATE_MENU;
                     menuSel = 0;
                     calHoldStart = 0;
+                    ledPink();
                     displayMenu();
                     return false;
                 }
@@ -689,7 +715,7 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
             }
             if (bRedP) {
                 state = STATE_READY;
-                ledGreen();
+                ledReady();
             }
             return false;
         }
@@ -710,7 +736,7 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
             ledYellow();
             if (now - stateStart >= CAL_SHOW_MS) {
                 state = STATE_READY;
-                ledGreen();
+                ledReady();
             }
             return false;
 
@@ -732,7 +758,7 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
                         jsMin[0],jsMin[1],jsMin[2],jsMin[3],
                         jsMax[0],jsMax[1],jsMax[2],jsMax[3]);
                     state = STATE_READY;
-                    ledGreen();
+                    ledReady();
                 } else {
                     displayMinMaxStep(calStep);
                 }
@@ -768,7 +794,7 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
         case STATE_RESET:
             if (now - stateStart >= CAL_SHOW_MS) {
                 state = STATE_READY;
-                ledGreen();
+                ledReady();
                 return true;  // sofort displayNormal aufrufen
             }
             return false;
@@ -785,6 +811,101 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
         }
     }
     return true;
+}
+
+// ──────────────────────────────────────────────
+// ESP-NOW
+// ──────────────────────────────────────────────
+#define BEACON_INTERVAL_MS  500
+
+uint8_t  realMac[6];
+uint8_t  peerMac[6];
+bool     paired          = false;
+unsigned long lastBeacon = 0;
+
+volatile bool pairingBeaconRx = false;
+volatile bool pairingAssignRx = false;
+uint8_t pairingCarMac[6];
+uint8_t pairingBaseMac[6];
+
+void onDataRecv(uint8_t *senderMac, uint8_t *data, int len) {
+    if (len < 1 || paired) return;
+    uint8_t msgType = data[0];
+    if (fbMode == MODE_DIRECT && msgType == MSG_BEACON) {
+        memcpy(pairingCarMac, senderMac, 6);
+        pairingBeaconRx = true;
+    } else if (fbMode == MODE_GAME && msgType == MSG_ASSIGN) {
+        if (len < (int)sizeof(MK_Assign)) return;
+        memcpy(pairingBaseMac, ((MK_Assign*)data)->baseMac, 6);
+        pairingAssignRx = true;
+    }
+}
+
+void initEspNow() {
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    WiFi.macAddress(realMac);
+    if (fbMode == MODE_DIRECT) {
+        uint8_t fakeMac[] = MK_BASE_MAC;
+        wifi_set_macaddr(STATION_IF, fakeMac);
+        Serial.println("[ESPNOW] Direct: MAC → DE:AD:BE:EF:BA:5E");
+    }
+    wifi_set_channel(MK_ESPNOW_CHANNEL);
+    if (esp_now_init() != 0) { Serial.println("[ESPNOW] Init fehlgeschlagen"); return; }
+    esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
+    esp_now_register_recv_cb(onDataRecv);
+    if (fbMode == MODE_GAME) {
+        uint8_t baseMac[] = MK_BASE_MAC;
+        esp_now_add_peer(baseMac, ESP_NOW_ROLE_COMBO, MK_ESPNOW_CHANNEL, NULL, 0);
+    }
+    Serial.printf("[ESPNOW] Init OK, Kanal %d\n", MK_ESPNOW_CHANNEL);
+}
+
+void handlePairing() {
+    if (paired) return;
+    if (fbMode == MODE_DIRECT && pairingBeaconRx) {
+        pairingBeaconRx = false;
+        memcpy(peerMac, pairingCarMac, 6);
+        esp_now_add_peer(peerMac, ESP_NOW_ROLE_COMBO, MK_ESPNOW_CHANNEL, NULL, 0);
+        wifi_set_macaddr(STATION_IF, realMac);
+        MK_Assign assign;
+        assign.slot = 1;
+        memcpy(assign.baseMac, realMac, 6);
+        esp_now_send(peerMac, (uint8_t*)&assign, sizeof(assign));
+        paired = true;
+        Serial.println("[ESPNOW] Direct: gepairt");
+        ledReady();
+    }
+    if (fbMode == MODE_GAME && pairingAssignRx) {
+        pairingAssignRx = false;
+        memcpy(peerMac, pairingBaseMac, 6);
+        esp_now_add_peer(peerMac, ESP_NOW_ROLE_COMBO, MK_ESPNOW_CHANNEL, NULL, 0);
+        paired = true;
+        Serial.println("[ESPNOW] Game: gepairt");
+        ledReady();
+    }
+}
+
+void sendBeacon() {
+    if (paired || fbMode != MODE_GAME) return;
+    unsigned long now = millis();
+    if (now - lastBeacon < BEACON_INTERVAL_MS) return;
+    lastBeacon = now;
+    MK_Beacon beacon;
+    beacon.deviceType = DEVICE_FB;
+    uint8_t baseMac[] = MK_BASE_MAC;
+    esp_now_send(baseMac, (uint8_t*)&beacon, sizeof(beacon));
+}
+
+void sendControlInput(int8_t throttle, int8_t steering,
+                      bool bY, bool bG, bool bB, bool bR) {
+    if (!paired) return;
+    MK_ControlInput pkt;
+    pkt.throttle = throttle;
+    pkt.steering = steering;
+    pkt.buttons  = (bY ? 0x01 : 0) | (bG ? 0x02 : 0) | (bB ? 0x04 : 0) | (bR ? 0x08 : 0);
+    pkt.maxSpeed = maxSpeed;
+    esp_now_send(peerMac, (uint8_t*)&pkt, sizeof(pkt));
 }
 
 // ──────────────────────────────────────────────
@@ -824,7 +945,8 @@ void setup() {
     updateBattery();
     lastBatCheck = millis();
     state = STATE_READY;
-    ledGreen();
+    initEspNow();
+    ledPulseOrange();
 }
 
 // ──────────────────────────────────────────────
@@ -886,6 +1008,15 @@ void loop() {
         updateBattery();
     }
 
+    handlePairing();
+    sendBeacon();
+
+    // Suchzustand: LED pulsiert bis Pairing steht
+    if (state == STATE_READY && !paired) {
+        ledPulseOrange();
+        displayConnecting();
+    }
+
     bool active = handleState(bYellowP, bGreenP, bBlueP, bRedP, bGreen, bBlue, rawLX, rawLY, rawRX, rawRY);
 
     if (!active) {
@@ -899,6 +1030,8 @@ void loop() {
 
     Serial.printf("LX:%6d | LY:%6d | RX:%6d | RY:%6d | Y:%d G:%d B:%d R:%d | thr:%4d str:%4d\n",
         rawLX, rawLY, rawRX, rawRY, bYellow, bGreen, bBlue, bRed, throttle, steering);
+
+    sendControlInput(throttle, steering, bYellow, bGreen, bBlue, bRed);
 
     if (!countdownShowing) {
         displayNormal(
