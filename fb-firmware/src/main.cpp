@@ -872,8 +872,17 @@ void handlePairing() {
         assign.slot = 1;
         memcpy(assign.baseMac, realMac, 6);
         esp_now_send(peerMac, (uint8_t*)&assign, sizeof(assign));
+        // Zufälligen Betriebskanal wählen und Auto zum Wechsel auffordern
+        const uint8_t channels[] = MK_DIRECT_CHANNELS;
+        uint8_t ch = channels[random(MK_DIRECT_CHAN_COUNT)];
+        MK_ChannelSwitch chSwitch;
+        chSwitch.channel = ch;
+        delay(20);  // kurz warten damit Auto MK_Assign verarbeiten kann
+        esp_now_send(peerMac, (uint8_t*)&chSwitch, sizeof(chSwitch));
+        delay(20);  // kurz warten damit Auto MK_ChannelSwitch verarbeiten kann
+        wifi_set_channel(ch);
         paired = true;
-        Serial.println("[ESPNOW] Direct: gepairt");
+        Serial.printf("[ESPNOW] Direct: gepairt, Kanal %d\n", ch);
         ledReady();
     }
     if (fbMode == MODE_GAME && pairingAssignRx) {

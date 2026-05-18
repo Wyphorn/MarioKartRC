@@ -26,7 +26,13 @@ enum MK_DeviceType : uint8_t {
 // After all devices are registered, the base station (RPi-triggered) scans for
 // the least congested channel and broadcasts MSG_CHANNEL_SWITCH to all peers.
 // Race data transmission begins after the channel switch, on the optimal channel.
-#define MK_ESPNOW_CHANNEL  1   // Fixed registration channel — all devices start here
+#define MK_ESPNOW_CHANNEL  1        // Fixed registration channel — all devices start here
+
+// After pairing, devices switch to an operational channel:
+// Game Mode: base station scans and selects via MSG_CHANNEL_SWITCH (RPi-triggered)
+// Direct Mode: FB picks randomly from non-overlapping channels to distribute pairs
+#define MK_DIRECT_CHANNELS   {1, 6, 11}  // Non-overlapping 2.4 GHz channels
+#define MK_DIRECT_CHAN_COUNT  3
 
 struct MK_ChannelSwitch {
     uint8_t type    = MSG_CHANNEL_SWITCH;
