@@ -13,6 +13,9 @@ enum MK_MsgType : uint8_t {
     MSG_BEACON         = 0x10,   // FB/Auto → Broadcast — device announces itself
     MSG_ASSIGN         = 0x11,   // Basis → FB/Auto (Unicast) — slot assignment response
     MSG_CHANNEL_SWITCH = 0x12,   // Basis → Broadcast — all devices switch to new channel
+                                 // At race end: base sends MSG_CHANNEL_SWITCH with channel=MK_ESPNOW_CHANNEL
+                                 // so all devices return to channel 1 and persist it — next boot starts clean.
+    MSG_MAPPING        = 0x13,   // Basis → FB/Auto (Unicast) — mapping process: show slot number/color
 };
 
 // ── Device types ─────────────────────────────────────────────────────────────
@@ -22,21 +25,60 @@ enum MK_DeviceType : uint8_t {
 };
 
 // ── Channel configuration ─────────────────────────────────────────────────────
-// All devices boot on MK_ESPNOW_CHANNEL for registration (beacon/assign flow).
-// After all devices are registered, the base station (RPi-triggered) scans for
-// the least congested channel and broadcasts MSG_CHANNEL_SWITCH to all peers.
-// Race data transmission begins after the channel switch, on the optimal channel.
+// Channel lifecycle (Game Mode):
+//
+//   1. Boot / Registration:
+//      All devices start on MK_ESPNOW_CHANNEL (1). FBs and cars beacon to
+//      MK_BASE_MAC; base station responds with MK_Assign.
+//
+//   2. Race start:
+//      After all devices are registered, the base station (RPi-triggered) scans
+//      for the least congested channel, then broadcasts MSG_CHANNEL_SWITCH to all
+//      paired peers. All devices switch and persist the channel. Race begins.
+//
+//   3. Race end:
+//      Base station broadcasts MSG_CHANNEL_SWITCH with channel=MK_ESPNOW_CHANNEL.
+//      All devices switch back to channel 1 and persist it. Next boot starts
+//      clean on channel 1 — no rejoin attempt needed.
+//
+// Channel lifecycle (Direct Mode):
+//   FB picks a random channel from MK_DIRECT_CHANNELS after pairing and sends
+//   MSG_CHANNEL_SWITCH to the car. Both persist the channel. On reconnect, FB
+//   boots to the persisted channel and waits for the car's beacon there.
+//   No race-end reset needed — each new pairing picks a fresh random channel.
+
 #define MK_ESPNOW_CHANNEL  1        // Fixed registration channel — all devices start here
 
-// After pairing, devices switch to an operational channel:
-// Game Mode: base station scans and selects via MSG_CHANNEL_SWITCH (RPi-triggered)
-// Direct Mode: FB picks randomly from non-overlapping channels to distribute pairs
 #define MK_DIRECT_CHANNELS   {1, 6, 11}  // Non-overlapping 2.4 GHz channels
 #define MK_DIRECT_CHAN_COUNT  3
 
 struct MK_ChannelSwitch {
     uint8_t type    = MSG_CHANNEL_SWITCH;
-    uint8_t channel;  // New channel 1–13, selected by base station after scan
+    uint8_t channel;  // Target channel 1–13
+};
+
+// ── Mapping process ───────────────────────────────────────────────────────────
+// Base station sends MK_Mapping unicast to each registered FB and car.
+// FB: displays slot number on screen so the operator can identify it.
+// Car: looks up slot in MK_MAPPING_COLORS and shows that color on its WS2812B.
+// Operator then assigns FB↔car pairs in the base station UI.
+
+struct MK_Mapping {
+    uint8_t type = MSG_MAPPING;
+    uint8_t slot;  // 1–8
+};
+
+// Car WS2812B color per slot — 8 well-distinguishable colors (RGB).
+// Usage: led.setPixelColor(0, led.Color(r, g, b)) with values below.
+static const uint8_t MK_MAPPING_COLORS[8][3] = {
+    {255,   0,   0},  // 1 – Rot
+    {  0, 255,   0},  // 2 – Grün
+    {  0,   0, 255},  // 3 – Blau
+    {255, 255,   0},  // 4 – Gelb
+    {  0, 255, 255},  // 5 – Cyan
+    {255,   0, 255},  // 6 – Magenta
+    {255, 128,   0},  // 7 – Orange
+    {255, 255, 255},  // 8 – Weiß
 };
 
 // ── Base station MAC address ──────────────────────────────────────────────────
@@ -50,12 +92,20 @@ struct MK_ChannelSwitch {
 // Axis mapping (swap) and trim are applied on the FB/car side — not transmitted.
 // Default mapping: LY → throttle, RX → steering.
 // Swapped mapping: RY → throttle, LX → steering (set in FB settings menu).
+// Receiver MUST implement a timeout (~200ms): if no packet arrives, set throttle=0.
+// The FB stops sending when it detects connection loss — the car must not keep
+// the last known throttle active indefinitely.
+
+#define MK_BTN_YELLOW  0x01
+#define MK_BTN_GREEN   0x02
+#define MK_BTN_BLUE    0x04
+#define MK_BTN_RED     0x08
 
 struct MK_ControlInput {
     uint8_t type     = MSG_CONTROL;
     int8_t  throttle;     // -100..100  (forward/backward)
     int8_t  steering;     // -100..100  (left/right)
-    uint8_t buttons;      // Bit 0=Yellow, Bit 1=Green, Bit 2=Blue, Bit 3=Red
+    uint8_t buttons;      // Bitmask: MK_BTN_YELLOW | MK_BTN_GREEN | MK_BTN_BLUE | MK_BTN_RED
     uint8_t maxSpeed;     // Player preference 1-10 (game may override)
 };
 
@@ -80,7 +130,7 @@ struct MK_GameFeedback {
     uint8_t lap;          // Current lap
     uint8_t lapTotal;     // Total laps
     uint8_t item;         // Active item/booster (0 = none, TBD)
-    uint8_t rumble;       // Rumble command (0=off, 1=short, 2=long, TBD)
+    uint8_t rumble;       // 0=off, 1=on — Basis steuert Dauer über Paketanzahl
     uint8_t speedLimit;   // Game-imposed speed limit 1-10 (10 = no limit)
 };
 
@@ -100,6 +150,22 @@ struct MK_GameFeedback {
 //   FB knows car's real MAC from the beacon sender address.
 //
 // On replacement hardware: device re-registers automatically, host reassigns slot.
+//
+// ── Reconnect after connection loss ──────────────────────────────────────────
+// Error handling is identical for FB and car:
+//
+//   1. Control-timeout (~200ms): stop motor / ignore inputs immediately.
+//   2. Re-beacon on CURRENT channel — do NOT fall back to MK_ESPNOW_CHANNEL
+//      autonomously. The car does not know the mode; falling back would break
+//      Game Mode reconnect where the base is not on channel 1 during a race.
+//   3. Both FB and car persist the operational channel in EEPROM after every
+//      MSG_CHANNEL_SWITCH. On reboot, load the saved channel and beacon there.
+//   4. If no pairing response within 5s on the saved channel: clear EEPROM,
+//      reboot to MK_ESPNOW_CHANNEL → clean re-registration.
+//
+// At race end the base sends MSG_CHANNEL_SWITCH with channel=MK_ESPNOW_CHANNEL,
+// so all devices land on channel 1 and persist it — the next boot is always
+// a clean start with no rejoin attempt.
 
 struct MK_Beacon {
     uint8_t  type       = MSG_BEACON;

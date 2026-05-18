@@ -37,6 +37,8 @@ extern "C" {
 #define RUMBLE_PWM          255
 
 // --- Timings ---
+#define LOOP_PERIOD_MS    20     // 50 Hz Zielfrequenz
+#define DISPLAY_PERIOD_MS 500   // Mindestabstand zwischen Display-Updates
 #define CAL_HOLD_MS   3000
 #define CAL_PULSE_MS  3000
 #define CAL_SHOW_MS   3000
@@ -54,6 +56,7 @@ extern "C" {
 #define JS_MENU_LOW        (JS_DEFAULT_CENTER - JS_MENU_THRESHOLD)   // ≈ 5494
 #define JS_DEADZONE        6
 #define MENU_COOLDOWN      300
+#define ADC_OVERSAMPLE     4    // Samples pro Kanal im Normalbetrieb (STATE_READY)
 
 // --- EEPROM ---
 #define EEPROM_MAGIC        0xCAFE
@@ -61,9 +64,10 @@ extern "C" {
 #define EEPROM_ADDR_CENTER  2   // 4x int16 = 8B
 #define EEPROM_ADDR_MIN    10   // 4x int16 = 8B
 #define EEPROM_ADDR_MAX    18   // 4x int16 = 8B
-#define EEPROM_ADDR_TRIM   26   // int8
-#define EEPROM_ADDR_LANG   27   // uint8
-#define EEPROM_SIZE        32
+#define EEPROM_ADDR_TRIM    26   // int8
+#define EEPROM_ADDR_LANG    27   // uint8
+#define EEPROM_ADDR_CHANNEL 28   // uint8, 0 = kein gespeicherter Kanal
+#define EEPROM_SIZE         32
 
 // --- Trim & Speed ---
 #define TRIM_STEPS  21
@@ -115,8 +119,10 @@ struct Strings {
     const char* rumbleOff;
     const char* swapOn;
     const char* swapOff;
-    const char* connectingDirect;  // "Warte auf Auto"
-    const char* connectingGame;    // "Verbinde mit Basis"
+    const char* connectingDirect;   // "Warte auf Auto"
+    const char* connectingGame;     // "Verbinde mit Basis"
+    const char* rejoiningLine1;     // Zeile 1: "Verbinde mit"
+    const char* rejoiningLine2;     // Zeile 2: "letztem Spiel"
 };
 
 const Strings STRINGS[LANG_COUNT] = {
@@ -150,7 +156,8 @@ const Strings STRINGS[LANG_COUNT] = {
         "Werte zurueckgesetzt",
         "An", "Aus",
         "An", "Aus",
-        "Warte auf Auto", "Verbinde mit Basis"
+        "Warte auf Auto", "Verbinde mit Basis",
+        "Verbinde mit", "letztem Spiel"
     },
     // LANG_EN
     {
@@ -182,7 +189,8 @@ const Strings STRINGS[LANG_COUNT] = {
         "Values reset",
         "On", "Off",
         "On", "Off",
-        "Waiting for car", "Connecting to base"
+        "Waiting for car", "Connecting to base",
+        "Reconnecting", "to last game"
     }
 };
 
@@ -331,7 +339,9 @@ void resetSettings() {
         jsMax[i]    = JS_DEFAULT_MAX;
         jsCenter[i] = JS_DEFAULT_CENTER;
     }
-    servoTrim     = 0;
+    servoTrim = 0;
+    uint8_t zero = 0;
+    EEPROM.put(EEPROM_ADDR_CHANNEL, zero);
     saveSettings();
     Serial.println("[RESET] Standardwerte wiederhergestellt – Offset-Kalibrierung noetig");
 }
@@ -424,12 +434,45 @@ void drawBatteryIcon(uint8_t pct) {
 void displayNormal(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
                    bool bYellow, bool bGreen, bool bBlue, bool bRed) {
     if (!dispOK) return;
+
+    static unsigned long lastDisplayMs = 0;
+    static bool    c_paired   = false;
+    static uint8_t c_position = 0xFF, c_lap = 0, c_lapTotal = 0, c_item = 0;
+    static uint8_t c_batPct   = 0xFF;
+    static bool    c_bY = false, c_bG = false, c_bB = false, c_bR = false;
+
+    bool changed = (paired             != c_paired)   ||
+                   (feedback.position  != c_position) ||
+                   (feedback.lap       != c_lap)      ||
+                   (feedback.lapTotal  != c_lapTotal)  ||
+                   (feedback.item      != c_item)      ||
+                   (batPct             != c_batPct)   ||
+                   (bYellow != c_bY) || (bGreen != c_bG) ||
+                   (bBlue   != c_bB) || (bRed   != c_bR);
+    if (!changed || millis() - lastDisplayMs < DISPLAY_PERIOD_MS) return;
+    lastDisplayMs = millis();
+
+    c_paired    = paired;
+    c_position  = feedback.position;
+    c_lap       = feedback.lap;
+    c_lapTotal  = feedback.lapTotal;
+    c_item      = feedback.item;
+    c_batPct    = batPct;
+    c_bY = bYellow; c_bG = bGreen; c_bB = bBlue; c_bR = bRed;
+
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0,  0); display.printf("LX:%4d  LY:%4d", lx, ly);
     display.setCursor(0,  8); display.printf("RX:%4d  RY:%4d", rx, ry);
     display.setCursor(0, 16); display.printf("Y:%d G:%d B:%d R:%d", bYellow, bGreen, bBlue, bRed);
+    display.setCursor(0, 24);
+    if (!paired)
+        display.print("Suche...");
+    else if (feedback.position > 0)
+        display.printf("P:%d L:%d/%d Item:%d", feedback.position, feedback.lap, feedback.lapTotal, feedback.item);
+    else
+        display.print("Verbunden");
     drawBatteryIcon(batPct);
     display.display();
 }
@@ -442,9 +485,16 @@ void displayConnecting() {
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
-    const char* msg = (fbMode == MODE_DIRECT) ? S().connectingDirect : S().connectingGame;
-    display.setCursor((128 - (int)strlen(msg) * 6) / 2, 28);
-    display.print(msg);
+    if (trySavedChannel) {
+        display.setCursor((128 - (int)strlen(S().rejoiningLine1) * 6) / 2, 24);
+        display.print(S().rejoiningLine1);
+        display.setCursor((128 - (int)strlen(S().rejoiningLine2) * 6) / 2, 34);
+        display.print(S().rejoiningLine2);
+    } else {
+        const char* msg = (fbMode == MODE_DIRECT) ? S().connectingDirect : S().connectingGame;
+        display.setCursor((128 - (int)strlen(msg) * 6) / 2, 28);
+        display.print(msg);
+    }
     drawBatteryIcon(batPct);
     display.display();
 }
@@ -816,7 +866,9 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
 // ──────────────────────────────────────────────
 // ESP-NOW
 // ──────────────────────────────────────────────
-#define BEACON_INTERVAL_MS  500
+#define BEACON_INTERVAL_MS        500
+#define FEEDBACK_TIMEOUT_MS      2000
+#define SAVED_CHANNEL_TIMEOUT_MS 5000
 
 uint8_t  realMac[6];
 uint8_t  peerMac[6];
@@ -828,16 +880,51 @@ volatile bool pairingAssignRx = false;
 uint8_t pairingCarMac[6];
 uint8_t pairingBaseMac[6];
 
+bool             trySavedChannel    = false;
+unsigned long    savedChannelStart  = 0;
+volatile uint8_t pendingChannelSave = 0;
+
+struct FeedbackState {
+    uint8_t position   = 0;
+    uint8_t lap        = 0;
+    uint8_t lapTotal   = 0;
+    uint8_t item       = 0;
+    uint8_t speedLimit = 10;
+    uint8_t rumble     = 0;
+};
+volatile FeedbackState feedbackRaw;
+volatile bool          feedbackNew  = false;
+FeedbackState          feedback;
+unsigned long          lastFeedbackMs = 0;
+unsigned long          rumbleFbEnd    = 0;
+
 void onDataRecv(uint8_t *senderMac, uint8_t *data, int len) {
-    if (len < 1 || paired) return;
+    if (len < 1) return;
     uint8_t msgType = data[0];
-    if (fbMode == MODE_DIRECT && msgType == MSG_BEACON) {
-        memcpy(pairingCarMac, senderMac, 6);
-        pairingBeaconRx = true;
-    } else if (fbMode == MODE_GAME && msgType == MSG_ASSIGN) {
-        if (len < (int)sizeof(MK_Assign)) return;
-        memcpy(pairingBaseMac, ((MK_Assign*)data)->baseMac, 6);
-        pairingAssignRx = true;
+    if (!paired) {
+        if (fbMode == MODE_DIRECT && msgType == MSG_BEACON) {
+            memcpy(pairingCarMac, senderMac, 6);
+            pairingBeaconRx = true;
+        } else if (fbMode == MODE_GAME && msgType == MSG_ASSIGN) {
+            if (len < (int)sizeof(MK_Assign)) return;
+            memcpy(pairingBaseMac, ((MK_Assign*)data)->baseMac, 6);
+            pairingAssignRx = true;
+        }
+        return;
+    }
+    if (msgType == MSG_FEEDBACK && len >= (int)sizeof(MK_GameFeedback)) {
+        const MK_GameFeedback* fb = (const MK_GameFeedback*)data;
+        feedbackRaw.position   = fb->position;
+        feedbackRaw.lap        = fb->lap;
+        feedbackRaw.lapTotal   = fb->lapTotal;
+        feedbackRaw.item       = fb->item;
+        feedbackRaw.speedLimit = fb->speedLimit;
+        feedbackRaw.rumble     = fb->rumble;
+        feedbackNew = true;
+    } else if (msgType == MSG_CHANNEL_SWITCH && len >= (int)sizeof(MK_ChannelSwitch)) {
+        uint8_t ch = ((const MK_ChannelSwitch*)data)->channel;
+        wifi_set_channel(ch);
+        pendingChannelSave = ch;
     }
 }
 
@@ -850,7 +937,16 @@ void initEspNow() {
         wifi_set_macaddr(STATION_IF, fakeMac);
         Serial.println("[ESPNOW] Direct: MAC → DE:AD:BE:EF:BA:5E");
     }
-    wifi_set_channel(MK_ESPNOW_CHANNEL);
+    uint8_t savedCh = 0;
+    EEPROM.get(EEPROM_ADDR_CHANNEL, savedCh);
+    if (savedCh >= 1 && savedCh <= 13) {
+        wifi_set_channel(savedCh);
+        trySavedChannel  = true;
+        savedChannelStart = millis();
+        Serial.printf("[ESPNOW] Gespeicherter Kanal %d – warte auf Pairing\n", savedCh);
+    } else {
+        wifi_set_channel(MK_ESPNOW_CHANNEL);
+    }
     if (esp_now_init() != 0) { Serial.println("[ESPNOW] Init fehlgeschlagen"); return; }
     esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
     esp_now_register_recv_cb(onDataRecv);
@@ -862,6 +958,13 @@ void initEspNow() {
 }
 
 void handlePairing() {
+    if (trySavedChannel && !paired && millis() - savedChannelStart > SAVED_CHANNEL_TIMEOUT_MS) {
+        uint8_t zero = 0;
+        EEPROM.put(EEPROM_ADDR_CHANNEL, zero);
+        EEPROM.commit();
+        Serial.println("[ESPNOW] Kein Pairing auf gespeichertem Kanal → Reboot");
+        ESP.restart();
+    }
     if (paired) return;
     if (fbMode == MODE_DIRECT && pairingBeaconRx) {
         pairingBeaconRx = false;
@@ -881,7 +984,11 @@ void handlePairing() {
         esp_now_send(peerMac, (uint8_t*)&chSwitch, sizeof(chSwitch));
         delay(20);  // kurz warten damit Auto MK_ChannelSwitch verarbeiten kann
         wifi_set_channel(ch);
+        EEPROM.put(EEPROM_ADDR_CHANNEL, ch);
+        EEPROM.commit();
         paired = true;
+        trySavedChannel = false;
+        lastFeedbackMs = millis();
         Serial.printf("[ESPNOW] Direct: gepairt, Kanal %d\n", ch);
         ledReady();
     }
@@ -890,6 +997,8 @@ void handlePairing() {
         memcpy(peerMac, pairingBaseMac, 6);
         esp_now_add_peer(peerMac, ESP_NOW_ROLE_COMBO, MK_ESPNOW_CHANNEL, NULL, 0);
         paired = true;
+        trySavedChannel = false;
+        lastFeedbackMs = millis();
         Serial.println("[ESPNOW] Game: gepairt");
         ledReady();
     }
@@ -912,9 +1021,40 @@ void sendControlInput(int8_t throttle, int8_t steering,
     MK_ControlInput pkt;
     pkt.throttle = throttle;
     pkt.steering = steering;
-    pkt.buttons  = (bY ? 0x01 : 0) | (bG ? 0x02 : 0) | (bB ? 0x04 : 0) | (bR ? 0x08 : 0);
-    pkt.maxSpeed = maxSpeed;
+    pkt.buttons  = (bY ? MK_BTN_YELLOW : 0) | (bG ? MK_BTN_GREEN : 0) | (bB ? MK_BTN_BLUE : 0) | (bR ? MK_BTN_RED : 0);
+    pkt.maxSpeed = min((uint8_t)maxSpeed, feedback.speedLimit);
     esp_now_send(peerMac, (uint8_t*)&pkt, sizeof(pkt));
+}
+
+void handleFeedback() {
+    if (feedbackNew) {
+        noInterrupts();
+        feedback.position   = feedbackRaw.position;
+        feedback.lap        = feedbackRaw.lap;
+        feedback.lapTotal   = feedbackRaw.lapTotal;
+        feedback.item       = feedbackRaw.item;
+        feedback.speedLimit = feedbackRaw.speedLimit;
+        uint8_t rumbleCmd   = feedbackRaw.rumble;
+        feedbackNew = false;
+        interrupts();
+        lastFeedbackMs = millis();
+        if (rumbleCmd == 1) rumbleFbEnd = millis() + 200;  // 200ms Safety-Timeout falls rumble=0 verloren geht
+        else                rumbleFbEnd = 0;
+    }
+    if (paired && millis() - lastFeedbackMs > FEEDBACK_TIMEOUT_MS) {
+        paired = false;
+        lastFeedbackMs = millis();
+        feedback = FeedbackState{};
+        Serial.println("[ESPNOW] Verbindung verloren");
+    }
+}
+
+void handleRumbleFb() {
+    if (!rumbleEnabled || batPct <= BAT_CRIT_PCT) {
+        analogWrite(PIN_RUMBLE, 0);
+        return;
+    }
+    analogWrite(PIN_RUMBLE, (millis() < rumbleFbEnd) ? RUMBLE_PWM : 0);
 }
 
 // ──────────────────────────────────────────────
@@ -937,6 +1077,7 @@ void setup() {
     fbMode = digitalRead(PIN_MODE) ? MODE_DIRECT : MODE_GAME;
     Serial.printf("[MODE] %s\n", fbMode == MODE_DIRECT ? "Direct" : "Game");
     adsOK  = ads.begin(0x48);
+    if (adsOK) ads.setDataRate(RATE_ADS1115_860SPS);
     dispOK = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
     if (!adsOK)  Serial.println("[FEHLER] ADS1115 nicht gefunden");
     if (!dispOK) Serial.println("[FEHLER] SSD1306 nicht gefunden");
@@ -962,6 +1103,7 @@ void setup() {
 // Loop
 // ──────────────────────────────────────────────
 void loop() {
+    static unsigned long lastLoopMs = 0;
     static bool prevYellow = false, prevGreen = false, prevBlue = false, prevRed = false;
 
     bool bYellow = !digitalRead(PIN_BTN_YELLOW);
@@ -978,10 +1120,28 @@ void loop() {
     prevBlue   = bBlue;
     prevRed    = bRed;
 
-    int16_t rawLX = adsOK ? ads.readADC_SingleEnded(JS_LEFT_X)  : jsCenter[0];
-    int16_t rawLY = adsOK ? ads.readADC_SingleEnded(JS_LEFT_Y)  : jsCenter[1];
-    int16_t rawRX = adsOK ? ads.readADC_SingleEnded(JS_RIGHT_X) : jsCenter[2];
-    int16_t rawRY = adsOK ? ads.readADC_SingleEnded(JS_RIGHT_Y) : jsCenter[3];
+    // Letzter bekannter Wert bleibt erhalten wenn ein Kanal gerade nicht gelesen wird
+    static int16_t rawLX = 0, rawLY = 0, rawRX = 0, rawRY = 0;
+    if (adsOK) {
+        if (state == STATE_READY) {
+            // Nur die 2 aktiven Kanäle, dafür mit Oversampling
+            uint8_t chA = swapSticks ? JS_RIGHT_Y : JS_LEFT_Y;
+            uint8_t chB = swapSticks ? JS_LEFT_X  : JS_RIGHT_X;
+            int32_t sumA = 0, sumB = 0;
+            for (int i = 0; i < ADC_OVERSAMPLE; i++) {
+                sumA += ads.readADC_SingleEnded(chA);
+                sumB += ads.readADC_SingleEnded(chB);
+            }
+            if (swapSticks) { rawRY = sumA / ADC_OVERSAMPLE; rawLX = sumB / ADC_OVERSAMPLE; }
+            else            { rawLY = sumA / ADC_OVERSAMPLE; rawRX = sumB / ADC_OVERSAMPLE; }
+        } else {
+            // Menü/Kalibrierung: alle 4 Kanäle für Navigation und Kalibrierung
+            rawLX = ads.readADC_SingleEnded(JS_LEFT_X);
+            rawLY = ads.readADC_SingleEnded(JS_LEFT_Y);
+            rawRX = ads.readADC_SingleEnded(JS_RIGHT_X);
+            rawRY = ads.readADC_SingleEnded(JS_RIGHT_Y);
+        }
+    }
 
     // Red 10s halten im Normalbetrieb → EEPROM-Reset (ab 5s Countdown)
     static unsigned long bRedResetHold = 0;
@@ -1017,6 +1177,14 @@ void loop() {
         updateBattery();
     }
 
+    handleFeedback();
+    if (pendingChannelSave > 0) {
+        uint8_t ch = pendingChannelSave;
+        pendingChannelSave = 0;
+        EEPROM.put(EEPROM_ADDR_CHANNEL, ch);
+        EEPROM.commit();
+        Serial.printf("[ESPNOW] Kanal %d gespeichert\n", ch);
+    }
     handlePairing();
     sendBeacon();
 
@@ -1028,27 +1196,28 @@ void loop() {
 
     bool active = handleState(bYellowP, bGreenP, bBlueP, bRedP, bGreen, bBlue, rawLX, rawLY, rawRX, rawRY);
 
-    if (!active) {
-        delay(50);
-        return;
+    if (active) {
+        // Default: LY→throttle, RX→steering  |  Swapped: RY→throttle, LX→steering
+        int8_t throttle = swapSticks ? mapJS(rawRY, JS_RIGHT_Y) : mapJS(rawLY, JS_LEFT_Y);
+        int8_t steering = swapSticks ? mapJS(rawLX, JS_LEFT_X)  : mapJS(rawRX, JS_RIGHT_X);
+
+        Serial.printf("LX:%6d | LY:%6d | RX:%6d | RY:%6d | Y:%d G:%d B:%d R:%d | thr:%4d str:%4d\n",
+            rawLX, rawLY, rawRX, rawRY, bYellow, bGreen, bBlue, bRed, throttle, steering);
+
+        sendControlInput(throttle, steering, bYellow, bGreen, bBlue, bRed);
+
+        if (paired && !countdownShowing) {
+            displayNormal(
+                mapJS(rawLX, JS_LEFT_X), mapJS(rawLY, JS_LEFT_Y),
+                mapJS(rawRX, JS_RIGHT_X), mapJS(rawRY, JS_RIGHT_Y),
+                bYellow, bGreen, bBlue, bRed
+            );
+        }
     }
 
-    // Default: LY→throttle, RX→steering  |  Swapped: RY→throttle, LX→steering
-    int8_t throttle = swapSticks ? mapJS(rawRY, JS_RIGHT_Y) : mapJS(rawLY, JS_LEFT_Y);
-    int8_t steering = swapSticks ? mapJS(rawLX, JS_LEFT_X)  : mapJS(rawRX, JS_RIGHT_X);
+    handleRumbleFb();
 
-    Serial.printf("LX:%6d | LY:%6d | RX:%6d | RY:%6d | Y:%d G:%d B:%d R:%d | thr:%4d str:%4d\n",
-        rawLX, rawLY, rawRX, rawRY, bYellow, bGreen, bBlue, bRed, throttle, steering);
-
-    sendControlInput(throttle, steering, bYellow, bGreen, bBlue, bRed);
-
-    if (!countdownShowing) {
-        displayNormal(
-            mapJS(rawLX, JS_LEFT_X), mapJS(rawLY, JS_LEFT_Y),
-            mapJS(rawRX, JS_RIGHT_X), mapJS(rawRY, JS_RIGHT_Y),
-            bYellow, bGreen, bBlue, bRed
-        );
-    }
-
-    delay(100);
+    unsigned long elapsed = millis() - lastLoopMs;
+    if (LOOP_PERIOD_MS > elapsed) delay(LOOP_PERIOD_MS - elapsed);
+    lastLoopMs = millis();
 }
