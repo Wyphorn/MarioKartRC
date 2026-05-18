@@ -285,6 +285,8 @@ FeedbackState          feedback;
 unsigned long          lastFeedbackMs = 0;
 unsigned long          rumbleFbEnd    = 0;
 
+volatile int8_t mappingSlot = -1;  // -1 = inaktiv, 1–8 = Slot anzeigen
+
 const Strings& S() { return STRINGS[langIndex]; }
 
 // ──────────────────────────────────────────────
@@ -540,6 +542,19 @@ void displayConnecting() {
         display.print(msg);
     }
     drawBatteryIcon(batPct);
+    display.display();
+}
+
+void displayMapping(int8_t slot) {
+    if (!dispOK) return;
+    display.clearDisplay();
+    display.setTextColor(SSD1306_WHITE);
+    display.setTextSize(1);
+    display.setCursor(40, 8);
+    display.print("Mapping");
+    display.setTextSize(4);
+    display.setCursor(50, 24);
+    display.print(slot);
     display.display();
 }
 
@@ -940,6 +955,8 @@ void onDataRecv(uint8_t *senderMac, uint8_t *data, uint8_t len) {
         uint8_t ch = ((const MK_ChannelSwitch*)data)->channel;
         wifi_set_channel(ch);
         pendingChannelSave = ch;
+    } else if (msgType == MSG_MAPPING && len >= (int)sizeof(MK_Mapping)) {
+        mappingSlot = ((const MK_Mapping*)data)->slot;
     }
 }
 
@@ -1229,7 +1246,14 @@ void loop() {
 
         sendControlInput(throttle, steering, bYellow, bGreen, bBlue, bRed);
 
-        if (paired && !countdownShowing) {
+        static int8_t prevMappingSlot = -2;
+        if (mappingSlot >= 1) {
+            if (mappingSlot != prevMappingSlot) {
+                prevMappingSlot = mappingSlot;
+                displayMapping(mappingSlot);
+            }
+        } else if (paired && !countdownShowing) {
+            prevMappingSlot = -1;
             displayNormal(
                 mapJS(rawLX, JS_LEFT_X), mapJS(rawLY, JS_LEFT_Y),
                 mapJS(rawRX, JS_RIGHT_X), mapJS(rawRY, JS_RIGHT_Y),

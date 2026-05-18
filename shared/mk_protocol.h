@@ -62,10 +62,12 @@ struct MK_ChannelSwitch {
 // FB: displays slot number on screen so the operator can identify it.
 // Car: looks up slot in MK_MAPPING_COLORS and shows that color on its WS2812B.
 // Operator then assigns FB↔car pairs in the base station UI.
+// When mapping is complete, base sends MK_Mapping with slot = -1 to all
+// registered FBs and cars — devices return to their normal idle display.
 
 struct MK_Mapping {
     uint8_t type = MSG_MAPPING;
-    uint8_t slot;  // 1–8
+    int8_t  slot;  // 1–8: show slot | -1: mapping beendet, Normalanzeige
 };
 
 // Car WS2812B color per slot — 8 well-distinguishable colors (RGB).
