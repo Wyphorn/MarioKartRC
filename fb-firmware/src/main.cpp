@@ -7,11 +7,13 @@
 
 // --- Pins ---
 #define PIN_RUMBLE  D8
-#define PIN_BTN1    D5
-#define PIN_BTN2    D6
-#define PIN_BTN3    D7
-#define PIN_BTN4    D3
+// Zuordnung Farbe → Pin: TBD beim PCB-Layout (Leiterbahnen Button-Board)
+#define PIN_BTN_YELLOW  D5
+#define PIN_BTN_GREEN   D6
+#define PIN_BTN_BLUE    D7
+#define PIN_BTN_RED     D3
 #define PIN_LED     D4
+#define PIN_MODE    D0
 
 // --- ADS1115 Kanäle ---
 #define JS_LEFT_X   0
@@ -28,23 +30,24 @@
 #define RUMBLE_DURATION_MS  1000
 #define RUMBLE_PWM          255
 
-// --- Normales Display-Layout ---
-#define DISP_DIVIDER_Y  25
-#define DISP_RX_Y       29
-#define DISP_RX_LINES    4
-
 // --- Timings ---
 #define CAL_HOLD_MS   3000
 #define CAL_PULSE_MS  3000
 #define CAL_SHOW_MS   3000
 
 // --- Joystick ---
-#define JS_DEADZONE     5
-#define JS_DEFAULT_MIN  0
-#define JS_DEFAULT_MAX  19700
-#define JS_MENU_HIGH    14000
-#define JS_MENU_LOW     2000
-#define MENU_COOLDOWN   300
+// Spannungsteiler: R_top = R_bot (beliebiger gleicher Wert 1k–100k)
+// → V_out = 5V × 0.5 = 2.5V, ADS-Wert = 2.5/4.096 × 32767 ≈ 19989
+// Minimum: Joystick bei GND → 0V → ADS ≈ 0
+// Default-Center: halber Bereich (überschrieben durch Offset-Kalibrierung beim Boot)
+#define JS_DEFAULT_MIN     0
+#define JS_DEFAULT_MAX     19989
+#define JS_DEFAULT_CENTER  9994      // JS_DEFAULT_MAX / 2
+#define JS_MENU_THRESHOLD  4500      // ~45% Auslenkung ab Center für Menünavigation
+#define JS_MENU_HIGH       (JS_DEFAULT_CENTER + JS_MENU_THRESHOLD)   // ≈ 14494
+#define JS_MENU_LOW        (JS_DEFAULT_CENTER - JS_MENU_THRESHOLD)   // ≈ 5494
+#define JS_DEADZONE        6
+#define MENU_COOLDOWN      300
 
 // --- EEPROM ---
 #define EEPROM_MAGIC        0xCAFE
@@ -61,6 +64,15 @@
 #define TRIM_MIN   -10
 #define TRIM_MAX    10
 #define SPEED_STEPS  10
+
+// --- Akku ---
+// Teiler: 100kΩ extern + 220kΩ/100kΩ intern → Vbat = analogRead/1023 * 4.2
+#define BAT_LOW_PCT   33
+#define BAT_CRIT_PCT  16
+#define BAT_CHECK_MS  10000
+
+// --- Menü ---
+#define MENU_ITEM_COUNT 8
 
 // --- Sprachen ---
 // Um eine weitere Sprache hinzuzufügen:
@@ -79,7 +91,7 @@ struct CalStep { const char* line1; const char* line2; };
 
 struct Strings {
     const char* menuTitle;
-    const char* menuItems[5];
+    const char* menuItems[MENU_ITEM_COUNT];
     const char* calOffTitle;
     const char* calOffRelease;
     const char* calOffDoing;
@@ -91,6 +103,12 @@ struct Strings {
     const char* speedTitle;
     const char* langTitle;
     const char* langNames[LANG_COUNT];
+    const char* resetTitle;
+    const char* resetDone;
+    const char* rumbleOn;
+    const char* rumbleOff;
+    const char* swapOn;
+    const char* swapOff;
 };
 
 const Strings STRINGS[LANG_COUNT] = {
@@ -98,7 +116,8 @@ const Strings STRINGS[LANG_COUNT] = {
     {
         "Einstellungen",
         { "Offset-Kalibrierung", "Min/Max-Kalibrierung",
-          "Servo-Trim", "Max. Speed", "Sprache" },
+          "Servo-Trim", "Max. Speed", "Sprache", "Rumble",
+          "Joysticks tauschen", "Reset" },
         "Offset-Kalibrierung",
         "Sticks loslassen",
         "Kalibriere...",
@@ -113,18 +132,23 @@ const Strings STRINGS[LANG_COUNT] = {
             { "Rechten Stick", "nach oben druecken"   },
             { "Rechten Stick", "nach unten druecken"  },
         },
-        "B1 = bestaetigen",
+        "Gelb = bestaetigen",
         "Schritt",
         "Servo-Trim",
         "Max. Speed",
         "Sprache",
-        { "Deutsch", "English" }
+        { "Deutsch", "English" },
+        "Reset",
+        "Werte zurueckgesetzt",
+        "An", "Aus",
+        "An", "Aus"
     },
     // LANG_EN
     {
         "Settings",
         { "Offset Calibration", "Min/Max Calibration",
-          "Servo Trim", "Max. Speed", "Language" },
+          "Servo Trim", "Max. Speed", "Language", "Rumble",
+          "Swap Sticks", "Reset" },
         "Offset Calibration",
         "Release sticks",
         "Calibrating...",
@@ -139,14 +163,21 @@ const Strings STRINGS[LANG_COUNT] = {
             { "Right stick", "push up"    },
             { "Right stick", "push down"  },
         },
-        "B1 = confirm",
+        "Yellow = confirm",
         "Step",
         "Servo Trim",
         "Max. Speed",
         "Language",
-        { "Deutsch", "English" }
+        { "Deutsch", "English" },
+        "Reset",
+        "Values reset",
+        "On", "Off",
+        "On", "Off"
     }
 };
+
+// --- Betriebs-Modus ---
+enum FBMode { MODE_DIRECT, MODE_GAME };
 
 // --- States ---
 enum FBState {
@@ -158,24 +189,26 @@ enum FBState {
     STATE_TRIM,
     STATE_SPEED,
     STATE_LANGUAGE,
+    STATE_RESET,
 };
-
-#define MENU_ITEM_COUNT 5
 
 // --- Globale Variablen ---
 Adafruit_ADS1115  ads;
 Adafruit_SSD1306  display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
 Adafruit_NeoPixel led(1, PIN_LED, NEO_GRB + NEO_KHZ800);
 
-bool adsOK  = false;
-bool dispOK = false;
+bool    adsOK   = false;
+bool    dispOK  = false;
+uint8_t batPct  = 100;
+FBMode  fbMode       = MODE_DIRECT;
+bool    rumbleEnabled = true;
 
 FBState  state        = STATE_READY;
 uint8_t  langIndex    = LANG_DE;
 int8_t   servoTrim    = 0;
 uint8_t  maxSpeed     = SPEED_STEPS;   // temporär, nicht im EEPROM
 
-int16_t  jsCenter[4]  = {9850, 9850, 9850, 9850};
+int16_t  jsCenter[4]  = {JS_DEFAULT_CENTER, JS_DEFAULT_CENTER, JS_DEFAULT_CENTER, JS_DEFAULT_CENTER};
 int16_t  jsMin[4]     = {JS_DEFAULT_MIN, JS_DEFAULT_MIN, JS_DEFAULT_MIN, JS_DEFAULT_MIN};
 int16_t  jsMax[4]     = {JS_DEFAULT_MAX, JS_DEFAULT_MAX, JS_DEFAULT_MAX, JS_DEFAULT_MAX};
 
@@ -183,8 +216,10 @@ unsigned long stateStart   = 0;
 unsigned long calHoldStart = 0;
 unsigned long lastMenuMove = 0;
 unsigned long lastRumble   = 0;
+unsigned long lastBatCheck = 0;
 
 bool    rumbleActive  = false;
+bool    swapSticks    = false;
 bool    calDone       = false;
 int8_t  menuSel       = 0;
 uint8_t calStep       = 0;
@@ -195,9 +230,6 @@ uint8_t langTemp      = LANG_DE;
 
 int16_t jsMinTemp[4];
 int16_t jsMaxTemp[4];
-
-char    rxLines[DISP_RX_LINES][22];
-String  serialBuf     = "";
 
 const Strings& S() { return STRINGS[langIndex]; }
 
@@ -214,6 +246,14 @@ void ledPulseYellow() {
     uint32_t t = (millis() - stateStart) % 600;
     uint8_t  v = (t < 300) ? (t * 60 / 300) : ((600 - t) * 60 / 300);
     setLed(v, v, 0);
+}
+void ledRedBlink() { uint8_t v = ((millis() / 500) % 2) ? 60 : 0; setLed(v, 0, 0); }
+void ledOrange()   { setLed(60, 20, 0); }
+void ledPink()     { setLed(60, 0, 40); }
+void ledReady() {
+    if      (batPct <= BAT_CRIT_PCT) ledRedBlink();
+    else if (batPct <= BAT_LOW_PCT)  ledOrange();
+    else                             ledGreen();
 }
 
 // ──────────────────────────────────────────────
@@ -264,6 +304,25 @@ void calibrateOffset() {
         jsCenter[0], jsCenter[1], jsCenter[2], jsCenter[3]);
 }
 
+void updateBattery() {
+    int32_t sum = 0;
+    for (int i = 0; i < 4; i++) sum += analogRead(A0);
+    float vbat = (sum / 4.0f) / 1023.0f * 4.2f;
+    batPct = (uint8_t)constrain((int)((vbat - 3.0f) / 1.2f * 100.0f), 0, 100);
+    Serial.printf("[BAT] %.2fV %d%%\n", vbat, batPct);
+}
+
+void resetSettings() {
+    for (int i = 0; i < 4; i++) {
+        jsMin[i]    = JS_DEFAULT_MIN;
+        jsMax[i]    = JS_DEFAULT_MAX;
+        jsCenter[i] = JS_DEFAULT_CENTER;
+    }
+    servoTrim     = 0;
+    saveSettings();
+    Serial.println("[RESET] Standardwerte wiederhergestellt – Offset-Kalibrierung noetig");
+}
+
 // ──────────────────────────────────────────────
 // Joystick-Mapping
 // Positive und negative Richtung werden separat skaliert,
@@ -288,6 +347,11 @@ int16_t mapJS(int16_t raw, int ch) {
 // Rumble
 // ──────────────────────────────────────────────
 void handleRumble() {
+    if (!rumbleEnabled || batPct <= BAT_CRIT_PCT) {
+        analogWrite(PIN_RUMBLE, 0);
+        rumbleActive = false;
+        return;
+    }
     unsigned long now = millis();
     if (!rumbleActive && (now - lastRumble >= RUMBLE_INTERVAL_MS)) {
         analogWrite(PIN_RUMBLE, RUMBLE_PWM);
@@ -303,26 +367,6 @@ void handleRumble() {
 }
 
 // ──────────────────────────────────────────────
-// Serial-Eingabe
-// ──────────────────────────────────────────────
-void addRxLine(const String& line) {
-    for (int i = 0; i < DISP_RX_LINES - 1; i++)
-        memcpy(rxLines[i], rxLines[i+1], 22);
-    strncpy(rxLines[DISP_RX_LINES-1], line.c_str(), 21);
-    rxLines[DISP_RX_LINES-1][21] = '\0';
-}
-void handleSerial() {
-    while (Serial.available()) {
-        char c = Serial.read();
-        if (c == '\n' || c == '\r') {
-            if (serialBuf.length() > 0) { addRxLine(serialBuf); serialBuf = ""; }
-        } else if (serialBuf.length() < 21) {
-            serialBuf += c;
-        }
-    }
-}
-
-// ──────────────────────────────────────────────
 // Display-Hilfsfunktionen
 // ──────────────────────────────────────────────
 void dispTitle(const char* title) {
@@ -334,31 +378,46 @@ void dispTitle(const char* title) {
     display.drawFastHLine(0, 9, 128, SSD1306_WHITE);
 }
 
-void dispHighlight(int y, const char* text) {
-    display.fillRect(0, y, 128, 10, SSD1306_WHITE);
+void dispHighlight(int y, const char* text, int h = 10) {
+    display.fillRect(0, y, 128, h, SSD1306_WHITE);
     display.setTextColor(SSD1306_BLACK);
-    display.setCursor(4, y + 1);
+    display.setCursor(4, y + (h >= 10 ? 1 : 0));
     display.print(text);
     display.setTextColor(SSD1306_WHITE);
+}
+
+// ──────────────────────────────────────────────
+// Display: Akku-Icon (top-right, 15x6px)
+// 6 Tiers: >83 / >66 / >50 / >33 / >16 / sonst → 6..1 Balken
+// Balken je 1px breit, 4px hoch, 1px Lücke; Nub 2px rechts daneben
+// ──────────────────────────────────────────────
+void drawBatteryIcon(uint8_t pct) {
+    uint8_t bars = (pct > 83) ? 6 :
+                   (pct > 66) ? 5 :
+                   (pct > 50) ? 4 :
+                   (pct > 33) ? 3 :
+                   (pct > 16) ? 2 : 1;
+    display.drawRect(113, 1, 13, 6, SSD1306_WHITE);
+    display.fillRect(126, 3, 2, 2, SSD1306_WHITE);
+    for (uint8_t i = 0; i < 6; i++) {
+        if (i < bars)
+            display.fillRect(114 + i * 2, 2, 1, 4, SSD1306_WHITE);
+    }
 }
 
 // ──────────────────────────────────────────────
 // Display: Normalbetrieb
 // ──────────────────────────────────────────────
 void displayNormal(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
-                   bool b1, bool b2, bool b3, bool b4) {
+                   bool bYellow, bool bGreen, bool bBlue, bool bRed) {
     if (!dispOK) return;
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0,  0); display.printf("LX:%4d  LY:%4d", lx, ly);
     display.setCursor(0,  8); display.printf("RX:%4d  RY:%4d", rx, ry);
-    display.setCursor(0, 16); display.printf("B1:%d B2:%d B3:%d B4:%d", b1, b2, b3, b4);
-    display.drawFastHLine(0, DISP_DIVIDER_Y, 128, SSD1306_WHITE);
-    for (int i = 0; i < DISP_RX_LINES; i++) {
-        display.setCursor(0, DISP_RX_Y + i * 8);
-        display.print(rxLines[i]);
-    }
+    display.setCursor(0, 16); display.printf("Y:%d G:%d B:%d R:%d", bYellow, bGreen, bBlue, bRed);
+    drawBatteryIcon(batPct);
     display.display();
 }
 
@@ -368,14 +427,33 @@ void displayNormal(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
 void displayMenu() {
     if (!dispOK) return;
     display.clearDisplay();
-    dispTitle(S().menuTitle);
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.print(S().menuTitle);
+    const char* modeStr = fbMode == MODE_DIRECT ? "Direct" : "Game";
+    display.setCursor(128 - (int)strlen(modeStr) * 6, 0);
+    display.print(modeStr);
+    display.drawFastHLine(0, 9, 128, SSD1306_WHITE);
     for (int i = 0; i < MENU_ITEM_COUNT; i++) {
-        int y = 11 + i * 10;
+        int y = 11 + i * 8;
+        char buf[22];
+        const char* itemText = S().menuItems[i];
+        if (i == 5) {
+            snprintf(buf, sizeof(buf), "Rumble: %s",
+                rumbleEnabled ? S().rumbleOn : S().rumbleOff);
+            itemText = buf;
+        } else if (i == 6) {
+            snprintf(buf, sizeof(buf), "%s: %s",
+                S().menuItems[6],
+                swapSticks ? S().swapOn : S().swapOff);
+            itemText = buf;
+        }
         if (i == menuSel)
-            dispHighlight(y, S().menuItems[i]);
+            dispHighlight(y, itemText, 8);
         else {
-            display.setCursor(4, y + 1);
-            display.print(S().menuItems[i]);
+            display.setCursor(4, y);
+            display.print(itemText);
         }
     }
     display.display();
@@ -464,6 +542,35 @@ void displaySpeedBar(uint8_t speed) {
 }
 
 // ──────────────────────────────────────────────
+// Display: Reset-Countdown
+// ──────────────────────────────────────────────
+void displayResetCountdown(int secs) {
+    if (!dispOK) return;
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(24, 4);
+    display.print("Reset in");
+    display.setTextSize(4);
+    display.setCursor(44, 24);
+    display.print(secs);
+    display.print("s");
+    display.display();
+}
+
+// ──────────────────────────────────────────────
+// Display: Reset-Bestätigung
+// ──────────────────────────────────────────────
+void displayReset() {
+    if (!dispOK) return;
+    display.clearDisplay();
+    dispTitle(S().resetTitle);
+    display.setCursor(0, 28);
+    display.println(S().resetDone);
+    display.display();
+}
+
+// ──────────────────────────────────────────────
 // Display: Sprachauswahl
 // ──────────────────────────────────────────────
 void displayLanguage(uint8_t sel) {
@@ -503,16 +610,17 @@ int8_t jsMenuX(int16_t rawLX, int16_t rawRX) {
 
 // ──────────────────────────────────────────────
 // State Machine
-// b1p/b4p = Tastendruck (Flanke), b2/b3 = Rohzustand für Combo
+// *P = Tastendruck (Flanke); bGreen/bBlue zusätzlich als Rohzustand für Combo
 // ──────────────────────────────────────────────
-bool handleState(bool b1p, bool b4p, bool b2, bool b3,
+bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
+                 bool bGreen, bool bBlue,
                  int16_t rawLX, int16_t rawLY, int16_t rawRX, int16_t rawRY) {
     unsigned long now = millis();
 
     switch (state) {
 
         case STATE_READY:
-            if (b2 && b3) {
+            if (bGreen && bBlue) {
                 if (calHoldStart == 0) calHoldStart = now;
                 if (now - calHoldStart >= CAL_HOLD_MS) {
                     state = STATE_MENU;
@@ -524,16 +632,17 @@ bool handleState(bool b1p, bool b4p, bool b2, bool b3,
             } else {
                 calHoldStart = 0;
             }
-            ledGreen();
+            ledReady();
             return true;
 
         case STATE_MENU: {
+            ledPink();
             int8_t dir = jsMenuY(rawLY, rawRY);
             if (dir) {
                 menuSel = constrain(menuSel + dir, 0, MENU_ITEM_COUNT - 1);
                 displayMenu();
             }
-            if (b1p) {
+            if (bYellowP) {
                 switch (menuSel) {
                     case 0: // Offset-Kalibrierung
                         state = STATE_CAL_OFFSET_PULSE;
@@ -562,9 +671,23 @@ bool handleState(bool b1p, bool b4p, bool b2, bool b3,
                         state = STATE_LANGUAGE;
                         displayLanguage(langTemp);
                         break;
+                    case 5: // Rumble toggle (temporär, kein EEPROM)
+                        rumbleEnabled = !rumbleEnabled;
+                        displayMenu();
+                        break;
+                    case 6: // Joysticks tauschen (temporär, kein EEPROM)
+                        swapSticks = !swapSticks;
+                        displayMenu();
+                        break;
+                    case 7: // Reset
+                        resetSettings();
+                        state = STATE_RESET;
+                        stateStart = now;
+                        displayReset();
+                        break;
                 }
             }
-            if (b4p) {
+            if (bRedP) {
                 state = STATE_READY;
                 ledGreen();
             }
@@ -592,7 +715,8 @@ bool handleState(bool b1p, bool b4p, bool b2, bool b3,
             return false;
 
         case STATE_CAL_MINMAX:
-            if (b1p) {
+            ledYellow();
+            if (bYellowP) {
                 int16_t raw[4] = {rawLX, rawLY, rawRX, rawRY};
                 int ch = CAL_STEP_CH[calStep];
                 if (CAL_STEP_ISMAX[calStep])
@@ -613,7 +737,7 @@ bool handleState(bool b1p, bool b4p, bool b2, bool b3,
                     displayMinMaxStep(calStep);
                 }
             }
-            if (b4p) {
+            if (bRedP) {
                 state = STATE_MENU;
                 displayMenu();
             }
@@ -625,8 +749,8 @@ bool handleState(bool b1p, bool b4p, bool b2, bool b3,
                 trimTemp = constrain(trimTemp + dir, TRIM_MIN, TRIM_MAX);
                 displayTrimBar(trimTemp);
             }
-            if (b1p) { servoTrim = trimTemp; saveSettings(); state = STATE_MENU; displayMenu(); }
-            if (b4p) { state = STATE_MENU; displayMenu(); }
+            if (bYellowP) { servoTrim = trimTemp; saveSettings(); state = STATE_MENU; displayMenu(); }
+            if (bRedP) { state = STATE_MENU; displayMenu(); }
             return false;
         }
 
@@ -636,10 +760,18 @@ bool handleState(bool b1p, bool b4p, bool b2, bool b3,
                 speedTemp = constrain((int)speedTemp + dir, 1, SPEED_STEPS);
                 displaySpeedBar(speedTemp);
             }
-            if (b1p) { maxSpeed = speedTemp; state = STATE_MENU; displayMenu(); }
-            if (b4p) { state = STATE_MENU; displayMenu(); }
+            if (bYellowP) { maxSpeed = speedTemp; state = STATE_MENU; displayMenu(); }
+            if (bRedP) { state = STATE_MENU; displayMenu(); }
             return false;
         }
+
+        case STATE_RESET:
+            if (now - stateStart >= CAL_SHOW_MS) {
+                state = STATE_READY;
+                ledGreen();
+                return true;  // sofort displayNormal aufrufen
+            }
+            return false;
 
         case STATE_LANGUAGE: {
             int8_t dir = jsMenuY(rawLY, rawRY);
@@ -647,8 +779,8 @@ bool handleState(bool b1p, bool b4p, bool b2, bool b3,
                 langTemp = constrain((int)langTemp + dir, 0, LANG_COUNT - 1);
                 displayLanguage(langTemp);
             }
-            if (b1p) { langIndex = langTemp; saveSettings(); state = STATE_MENU; displayMenu(); }
-            if (b4p) { state = STATE_MENU; displayMenu(); }
+            if (bYellowP) { langIndex = langTemp; saveSettings(); state = STATE_MENU; displayMenu(); }
+            if (bRedP) { state = STATE_MENU; displayMenu(); }
             return false;
         }
     }
@@ -660,10 +792,10 @@ bool handleState(bool b1p, bool b4p, bool b2, bool b3,
 // ──────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
-    pinMode(PIN_BTN1, INPUT_PULLUP);
-    pinMode(PIN_BTN2, INPUT_PULLUP);
-    pinMode(PIN_BTN3, INPUT_PULLUP);
-    pinMode(PIN_BTN4, INPUT_PULLUP);
+    pinMode(PIN_BTN_YELLOW, INPUT_PULLUP);
+    pinMode(PIN_BTN_GREEN,  INPUT_PULLUP);
+    pinMode(PIN_BTN_BLUE,   INPUT_PULLUP);
+    pinMode(PIN_BTN_RED,    INPUT_PULLUP);
     pinMode(PIN_RUMBLE, OUTPUT);
     analogWrite(PIN_RUMBLE, 0);
     Wire.begin(D2, D1);
@@ -671,16 +803,26 @@ void setup() {
     led.begin();
     led.setBrightness(80);
     setLed(0, 0, 0);
+    pinMode(PIN_MODE, INPUT);
+    fbMode = digitalRead(PIN_MODE) ? MODE_DIRECT : MODE_GAME;
+    Serial.printf("[MODE] %s\n", fbMode == MODE_DIRECT ? "Direct" : "Game");
     adsOK  = ads.begin(0x48);
     dispOK = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
     if (!adsOK)  Serial.println("[FEHLER] ADS1115 nicht gefunden");
     if (!dispOK) Serial.println("[FEHLER] SSD1306 nicht gefunden");
-    memset(rxLines, 0, sizeof(rxLines));
+    if (!digitalRead(PIN_BTN_RED)) {
+        Serial.println("[RESET] Boot-Reset via Red");
+        resetSettings();
+        displayReset();
+        delay(CAL_SHOW_MS);
+    }
     if (!loadSettings()) {
-        Serial.println("[EEPROM] kein Wert, kalibriere Offset...");
-        calibrateOffset();
+        Serial.println("[EEPROM] kein Wert, Standardwerte aktiv – Offset-Kalibrierung noetig");
+        saveSettings();
     }
     maxSpeed = SPEED_STEPS;
+    updateBattery();
+    lastBatCheck = millis();
     state = STATE_READY;
     ledGreen();
 }
@@ -689,40 +831,82 @@ void setup() {
 // Loop
 // ──────────────────────────────────────────────
 void loop() {
-    static bool prevB1 = false, prevB4 = false;
+    static bool prevYellow = false, prevGreen = false, prevBlue = false, prevRed = false;
 
-    bool b1 = !digitalRead(PIN_BTN1);
-    bool b2 = !digitalRead(PIN_BTN2);
-    bool b3 = !digitalRead(PIN_BTN3);
-    bool b4 = !digitalRead(PIN_BTN4);
+    bool bYellow = !digitalRead(PIN_BTN_YELLOW);
+    bool bGreen  = !digitalRead(PIN_BTN_GREEN);
+    bool bBlue   = !digitalRead(PIN_BTN_BLUE);
+    bool bRed    = !digitalRead(PIN_BTN_RED);
 
-    bool b1p = b1 && !prevB1;
-    bool b4p = b4 && !prevB4;
-    prevB1 = b1;
-    prevB4 = b4;
+    bool bYellowP = bYellow && !prevYellow;
+    bool bGreenP  = bGreen  && !prevGreen;
+    bool bBlueP   = bBlue   && !prevBlue;
+    bool bRedP    = bRed    && !prevRed;
+    prevYellow = bYellow;
+    prevGreen  = bGreen;
+    prevBlue   = bBlue;
+    prevRed    = bRed;
 
     int16_t rawLX = adsOK ? ads.readADC_SingleEnded(JS_LEFT_X)  : jsCenter[0];
     int16_t rawLY = adsOK ? ads.readADC_SingleEnded(JS_LEFT_Y)  : jsCenter[1];
     int16_t rawRX = adsOK ? ads.readADC_SingleEnded(JS_RIGHT_X) : jsCenter[2];
     int16_t rawRY = adsOK ? ads.readADC_SingleEnded(JS_RIGHT_Y) : jsCenter[3];
 
-    bool active = handleState(b1p, b4p, b2, b3, rawLX, rawLY, rawRX, rawRY);
+    // Red 10s halten im Normalbetrieb → EEPROM-Reset (ab 5s Countdown)
+    static unsigned long bRedResetHold = 0;
+    static int           lastCountdown = -1;
+    bool countdownShowing = false;
+    if (state == STATE_READY) {
+        if (bRed) {
+            if (bRedResetHold == 0) bRedResetHold = millis();
+            unsigned long elapsed = millis() - bRedResetHold;
+            if (elapsed >= 10000) {
+                resetSettings();
+                state = STATE_RESET;
+                stateStart = millis();
+                displayReset();
+                bRedResetHold = 0;
+                lastCountdown = -1;
+            } else if (elapsed >= 5000) {
+                int cd = 10 - (int)(elapsed / 1000);
+                if (cd != lastCountdown) {
+                    lastCountdown = cd;
+                    displayResetCountdown(cd);
+                }
+                countdownShowing = true;
+            }
+        } else {
+            if (bRedResetHold != 0) lastCountdown = -1;
+            bRedResetHold = 0;
+        }
+    }
+
+    if (millis() - lastBatCheck >= BAT_CHECK_MS) {
+        lastBatCheck = millis();
+        updateBattery();
+    }
+
+    bool active = handleState(bYellowP, bGreenP, bBlueP, bRedP, bGreen, bBlue, rawLX, rawLY, rawRX, rawRY);
 
     if (!active) {
         delay(50);
         return;
     }
 
-    handleSerial();
+    // Default: LY→throttle, RX→steering  |  Swapped: RY→throttle, LX→steering
+    int8_t throttle = swapSticks ? mapJS(rawRY, JS_RIGHT_Y) : mapJS(rawLY, JS_LEFT_Y);
+    int8_t steering = swapSticks ? mapJS(rawLX, JS_LEFT_X)  : mapJS(rawRX, JS_RIGHT_X);
 
-    Serial.printf("LX:%6d | LY:%6d | RX:%6d | RY:%6d | B1:%d B2:%d B3:%d B4:%d\n",
-        rawLX, rawLY, rawRX, rawRY, b1, b2, b3, b4);
+    Serial.printf("LX:%6d | LY:%6d | RX:%6d | RY:%6d | Y:%d G:%d B:%d R:%d | thr:%4d str:%4d\n",
+        rawLX, rawLY, rawRX, rawRY, bYellow, bGreen, bBlue, bRed, throttle, steering);
 
-    displayNormal(
-        mapJS(rawLX, JS_LEFT_X), mapJS(rawLY, JS_LEFT_Y),
-        mapJS(rawRX, JS_RIGHT_X), mapJS(rawRY, JS_RIGHT_Y),
-        b1, b2, b3, b4
-    );
+    if (!countdownShowing) {
+        displayNormal(
+            mapJS(rawLX, JS_LEFT_X), mapJS(rawLY, JS_LEFT_Y),
+            mapJS(rawRX, JS_RIGHT_X), mapJS(rawRY, JS_RIGHT_Y),
+            bYellow, bGreen, bBlue, bRed
+        );
+    }
 
     delay(100);
 }
