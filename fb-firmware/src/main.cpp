@@ -249,9 +249,24 @@ uint8_t langTemp      = LANG_DE;
 int16_t jsMinTemp[4];
 int16_t jsMaxTemp[4];
 
-// --- ESP-NOW: Pairing & Feedback (vor Display-Funktionen, da dort referenziert) ---
+// --- ESP-NOW Globals ---
+#define BEACON_INTERVAL_MS        500
+#define FEEDBACK_TIMEOUT_MS      2000
+#define SAVED_CHANNEL_TIMEOUT_MS 5000
+
+uint8_t  realMac[6];
+uint8_t  peerMac[6];
 bool     paired          = false;
-bool     trySavedChannel = false;
+unsigned long lastBeacon = 0;
+
+volatile bool pairingBeaconRx = false;
+volatile bool pairingAssignRx = false;
+uint8_t pairingCarMac[6];
+uint8_t pairingBaseMac[6];
+
+bool             trySavedChannel    = false;
+unsigned long    savedChannelStart  = 0;
+volatile uint8_t pendingChannelSave = 0;
 
 struct FeedbackState {
     uint8_t position   = 0;
@@ -893,22 +908,6 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
 // ──────────────────────────────────────────────
 // ESP-NOW
 // ──────────────────────────────────────────────
-#define BEACON_INTERVAL_MS        500
-#define FEEDBACK_TIMEOUT_MS      2000
-#define SAVED_CHANNEL_TIMEOUT_MS 5000
-
-uint8_t  realMac[6];
-uint8_t  peerMac[6];
-unsigned long lastBeacon = 0;
-
-volatile bool pairingBeaconRx = false;
-volatile bool pairingAssignRx = false;
-uint8_t pairingCarMac[6];
-uint8_t pairingBaseMac[6];
-
-unsigned long    savedChannelStart  = 0;
-volatile uint8_t pendingChannelSave = 0;
-
 void onDataRecv(uint8_t *senderMac, uint8_t *data, uint8_t len) {
     if (len < 1) return;
     uint8_t msgType = data[0];
