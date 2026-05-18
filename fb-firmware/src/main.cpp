@@ -249,6 +249,25 @@ uint8_t langTemp      = LANG_DE;
 int16_t jsMinTemp[4];
 int16_t jsMaxTemp[4];
 
+// --- ESP-NOW: Pairing & Feedback (vor Display-Funktionen, da dort referenziert) ---
+bool     paired          = false;
+bool     trySavedChannel = false;
+
+struct FeedbackState {
+    uint8_t position   = 0;
+    uint8_t lap        = 0;
+    uint8_t lapTotal   = 0;
+    uint8_t item       = 0;
+    uint8_t speedLimit = 10;
+    uint8_t rumble     = 0;
+    uint8_t carBat     = 0;
+};
+volatile FeedbackState feedbackRaw;
+volatile bool          feedbackNew    = false;
+FeedbackState          feedback;
+unsigned long          lastFeedbackMs = 0;
+unsigned long          rumbleFbEnd    = 0;
+
 const Strings& S() { return STRINGS[langIndex]; }
 
 // ──────────────────────────────────────────────
@@ -410,22 +429,27 @@ void dispHighlight(int y, const char* text, int h = 10) {
 }
 
 // ──────────────────────────────────────────────
-// Display: Akku-Icon (top-right, 15x6px)
-// 6 Tiers: >83 / >66 / >50 / >33 / >16 / sonst → 6..1 Balken
+// Display: Akku-Icon (15x6px)
 // Balken je 1px breit, 4px hoch, 1px Lücke; Nub 2px rechts daneben
+// FB-Icon: pct → bars-Konversion, feste Position (113,1).
+// Auto-Icon: carBat 0–5 direkt als bars, Position (95,1).
 // ──────────────────────────────────────────────
+void drawBatteryIconBars(uint8_t bars, uint8_t x, uint8_t y) {
+    display.drawRect(x, y, 13, 6, SSD1306_WHITE);
+    display.fillRect(x + 13, y + 2, 2, 2, SSD1306_WHITE);
+    for (uint8_t i = 0; i < 6; i++) {
+        if (i < bars)
+            display.fillRect(x + 1 + i * 2, y + 1, 1, 4, SSD1306_WHITE);
+    }
+}
+
 void drawBatteryIcon(uint8_t pct) {
     uint8_t bars = (pct > 83) ? 6 :
                    (pct > 66) ? 5 :
                    (pct > 50) ? 4 :
                    (pct > 33) ? 3 :
                    (pct > 16) ? 2 : 1;
-    display.drawRect(113, 1, 13, 6, SSD1306_WHITE);
-    display.fillRect(126, 3, 2, 2, SSD1306_WHITE);
-    for (uint8_t i = 0; i < 6; i++) {
-        if (i < bars)
-            display.fillRect(114 + i * 2, 2, 1, 4, SSD1306_WHITE);
-    }
+    drawBatteryIconBars(bars, 113, 1);
 }
 
 // ──────────────────────────────────────────────
@@ -438,7 +462,7 @@ void displayNormal(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
     static unsigned long lastDisplayMs = 0;
     static bool    c_paired   = false;
     static uint8_t c_position = 0xFF, c_lap = 0, c_lapTotal = 0, c_item = 0;
-    static uint8_t c_batPct   = 0xFF;
+    static uint8_t c_batPct   = 0xFF, c_carBat = 0xFF;
     static bool    c_bY = false, c_bG = false, c_bB = false, c_bR = false;
 
     bool changed = (paired             != c_paired)   ||
@@ -446,6 +470,7 @@ void displayNormal(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
                    (feedback.lap       != c_lap)      ||
                    (feedback.lapTotal  != c_lapTotal)  ||
                    (feedback.item      != c_item)      ||
+                   (feedback.carBat    != c_carBat)    ||
                    (batPct             != c_batPct)   ||
                    (bYellow != c_bY) || (bGreen != c_bG) ||
                    (bBlue   != c_bB) || (bRed   != c_bR);
@@ -457,6 +482,7 @@ void displayNormal(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
     c_lap       = feedback.lap;
     c_lapTotal  = feedback.lapTotal;
     c_item      = feedback.item;
+    c_carBat    = feedback.carBat;
     c_batPct    = batPct;
     c_bY = bYellow; c_bG = bGreen; c_bB = bBlue; c_bR = bRed;
 
@@ -474,6 +500,7 @@ void displayNormal(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
     else
         display.print("Verbunden");
     drawBatteryIcon(batPct);
+    drawBatteryIconBars(feedback.carBat, 95, 1);
     display.display();
 }
 
@@ -872,7 +899,6 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
 
 uint8_t  realMac[6];
 uint8_t  peerMac[6];
-bool     paired          = false;
 unsigned long lastBeacon = 0;
 
 volatile bool pairingBeaconRx = false;
@@ -880,25 +906,10 @@ volatile bool pairingAssignRx = false;
 uint8_t pairingCarMac[6];
 uint8_t pairingBaseMac[6];
 
-bool             trySavedChannel    = false;
 unsigned long    savedChannelStart  = 0;
 volatile uint8_t pendingChannelSave = 0;
 
-struct FeedbackState {
-    uint8_t position   = 0;
-    uint8_t lap        = 0;
-    uint8_t lapTotal   = 0;
-    uint8_t item       = 0;
-    uint8_t speedLimit = 10;
-    uint8_t rumble     = 0;
-};
-volatile FeedbackState feedbackRaw;
-volatile bool          feedbackNew  = false;
-FeedbackState          feedback;
-unsigned long          lastFeedbackMs = 0;
-unsigned long          rumbleFbEnd    = 0;
-
-void onDataRecv(uint8_t *senderMac, uint8_t *data, int len) {
+void onDataRecv(uint8_t *senderMac, uint8_t *data, uint8_t len) {
     if (len < 1) return;
     uint8_t msgType = data[0];
     if (!paired) {
@@ -920,6 +931,7 @@ void onDataRecv(uint8_t *senderMac, uint8_t *data, int len) {
         feedbackRaw.item       = fb->item;
         feedbackRaw.speedLimit = fb->speedLimit;
         feedbackRaw.rumble     = fb->rumble;
+        feedbackRaw.carBat     = fb->carBat;
         feedbackNew = true;
     } else if (msgType == MSG_CHANNEL_SWITCH && len >= (int)sizeof(MK_ChannelSwitch)) {
         uint8_t ch = ((const MK_ChannelSwitch*)data)->channel;
@@ -1034,6 +1046,7 @@ void handleFeedback() {
         feedback.lapTotal   = feedbackRaw.lapTotal;
         feedback.item       = feedbackRaw.item;
         feedback.speedLimit = feedbackRaw.speedLimit;
+        feedback.carBat     = feedbackRaw.carBat;
         uint8_t rumbleCmd   = feedbackRaw.rumble;
         feedbackNew = false;
         interrupts();

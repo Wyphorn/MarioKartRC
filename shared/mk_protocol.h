@@ -132,6 +132,7 @@ struct MK_GameFeedback {
     uint8_t item;         // Active item/booster (0 = none, TBD)
     uint8_t rumble;       // 0=off, 1=on — Basis steuert Dauer über Paketanzahl
     uint8_t speedLimit;   // Game-imposed speed limit 1-10 (10 = no limit)
+    uint8_t carBat;       // 0=leer … 5=voll — vorquantisiert vom Fahrzeug (kein Display-Jitter durch LiPo-Rauschen)
 };
 
 // ── Device registration ───────────────────────────────────────────────────────
