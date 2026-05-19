@@ -1081,7 +1081,10 @@ void handleFeedback() {
         if (rumbleCmd == 1) rumbleFbEnd = millis() + 200;  // 200ms Safety-Timeout falls rumble=0 verloren geht
         else                rumbleFbEnd = 0;
     }
-    if (paired && millis() - lastFeedbackMs > FEEDBACK_TIMEOUT_MS) {
+    // Timeout nur auf Betriebskanal aktiv — Kanal 1 ist Setup-Kanal (Mapping,
+    // Pairing), dort schickt die Basis kein Feedback und kein Heartbeat nötig.
+    if (paired && wifi_get_channel() != MK_ESPNOW_CHANNEL
+            && millis() - lastFeedbackMs > FEEDBACK_TIMEOUT_MS) {
         paired = false;
         lastFeedbackMs = millis();
         feedback = FeedbackState{};

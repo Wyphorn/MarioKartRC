@@ -47,10 +47,12 @@ enum MK_DeviceType : uint8_t {
 //   boots to the persisted channel and waits for the car's beacon there.
 //   No race-end reset needed — each new pairing picks a fresh random channel.
 
-#define MK_ESPNOW_CHANNEL  1        // Fixed registration channel — all devices start here
+#define MK_ESPNOW_CHANNEL  1        // Fixed registration/setup channel — NEVER used as race channel.
+                                    // Base station channel scanner MUST exclude MK_ESPNOW_CHANNEL.
+                                    // Devices use channel != 1 to detect active race vs. setup phase.
 
-#define MK_DIRECT_CHANNELS   {1, 6, 11}  // Non-overlapping 2.4 GHz channels
-#define MK_DIRECT_CHAN_COUNT  3
+#define MK_DIRECT_CHANNELS   {4, 6, 9, 11}  // Direct Mode operational channels (1 excluded = setup only)
+#define MK_DIRECT_CHAN_COUNT  4              // Not fully non-overlapping, but distributes load
 
 struct MK_ChannelSwitch {
     uint8_t type    = MSG_CHANNEL_SWITCH;
