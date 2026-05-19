@@ -32,8 +32,6 @@ extern "C" {
 #define OLED_HEIGHT 64
 
 // --- Rumble ---
-#define RUMBLE_INTERVAL_MS  10000
-#define RUMBLE_DURATION_MS  1000
 #define RUMBLE_PWM          255
 
 // --- Timings ---
@@ -82,7 +80,8 @@ extern "C" {
 #define BAT_CHECK_MS  10000
 
 // --- Menü ---
-#define MENU_ITEM_COUNT 8
+#define MENU_ITEM_COUNT  9
+#define MENU_VISIBLE     6
 
 // --- Sprachen ---
 // Um eine weitere Sprache hinzuzufügen:
@@ -131,7 +130,7 @@ const Strings STRINGS[LANG_COUNT] = {
         "Einstellungen",
         { "Offset-Kalibrierung", "Min/Max-Kalibrierung",
           "Servo-Trim", "Max. Speed", "Sprache", "Rumble",
-          "Joysticks tauschen", "Reset" },
+          "Joysticks tauschen", "Debug", "Reset" },
         "Offset-Kalibrierung",
         "Sticks loslassen",
         "Kalibriere...",
@@ -164,7 +163,7 @@ const Strings STRINGS[LANG_COUNT] = {
         "Settings",
         { "Offset Calibration", "Min/Max Calibration",
           "Servo Trim", "Max. Speed", "Language", "Rumble",
-          "Swap Sticks", "Reset" },
+          "Swap Sticks", "Debug", "Reset" },
         "Offset Calibration",
         "Release sticks",
         "Calibrating...",
@@ -208,6 +207,7 @@ enum FBState {
     STATE_SPEED,
     STATE_LANGUAGE,
     STATE_RESET,
+    STATE_DEBUG,
 };
 
 // --- Globale Variablen ---
@@ -218,6 +218,7 @@ Adafruit_NeoPixel led(1, PIN_LED, NEO_GRB + NEO_KHZ800);
 bool    adsOK   = false;
 bool    dispOK  = false;
 uint8_t batPct  = 100;
+float   batVolt = 0.0f;
 FBMode  fbMode       = MODE_DIRECT;
 bool    rumbleEnabled = true;
 
@@ -233,13 +234,12 @@ int16_t  jsMax[4]     = {JS_DEFAULT_MAX, JS_DEFAULT_MAX, JS_DEFAULT_MAX, JS_DEFA
 unsigned long stateStart   = 0;
 unsigned long calHoldStart = 0;
 unsigned long lastMenuMove = 0;
-unsigned long lastRumble   = 0;
 unsigned long lastBatCheck = 0;
 
-bool    rumbleActive  = false;
 bool    swapSticks    = false;
 bool    calDone       = false;
 int8_t  menuSel       = 0;
+int8_t  menuScroll    = 0;
 uint8_t calStep       = 0;
 
 int8_t  trimTemp      = 0;
@@ -271,13 +271,12 @@ unsigned long    savedChannelStart  = 0;
 volatile uint8_t pendingChannelSave = 0;
 
 struct FeedbackState {
-    uint8_t position   = 0;
-    uint8_t lap        = 0;
-    uint8_t lapTotal   = 0;
-    uint8_t item       = 0;
-    uint8_t speedLimit = 10;
-    uint8_t rumble     = 0;
-    uint8_t carBat     = 0;
+    uint8_t position = 0;
+    uint8_t lap      = 0;
+    uint8_t lapTotal = 0;
+    uint8_t item     = 0;
+    uint8_t rumble   = 0;
+    uint8_t carBat   = 0;
 };
 volatile FeedbackState feedbackRaw;
 volatile bool          feedbackNew    = false;
@@ -366,9 +365,9 @@ void calibrateOffset() {
 void updateBattery() {
     int32_t sum = 0;
     for (int i = 0; i < 4; i++) sum += analogRead(A0);
-    float vbat = (sum / 4.0f) / 1023.0f * 4.2f;
-    batPct = (uint8_t)constrain((int)((vbat - 3.0f) / 1.2f * 100.0f), 0, 100);
-    Serial.printf("[BAT] %.2fV %d%%\n", vbat, batPct);
+    batVolt = (sum / 4.0f) / 1023.0f * 4.2f;
+    batPct = (uint8_t)constrain((int)((batVolt - 3.0f) / 1.2f * 100.0f), 0, 100);
+    Serial.printf("[BAT] %.2fV %d%%\n", batVolt, batPct);
 }
 
 void resetSettings() {
@@ -407,25 +406,6 @@ int16_t mapJS(int16_t raw, int ch) {
 // ──────────────────────────────────────────────
 // Rumble
 // ──────────────────────────────────────────────
-void handleRumble() {
-    if (!rumbleEnabled || batPct <= BAT_CRIT_PCT) {
-        analogWrite(PIN_RUMBLE, 0);
-        rumbleActive = false;
-        return;
-    }
-    unsigned long now = millis();
-    if (!rumbleActive && (now - lastRumble >= RUMBLE_INTERVAL_MS)) {
-        analogWrite(PIN_RUMBLE, RUMBLE_PWM);
-        rumbleActive = true;
-        lastRumble = now;
-        Serial.println("[RUMBLE] an");
-    }
-    if (rumbleActive && (now - lastRumble >= RUMBLE_DURATION_MS)) {
-        analogWrite(PIN_RUMBLE, 0);
-        rumbleActive = false;
-        Serial.println("[RUMBLE] aus");
-    }
-}
 
 // ──────────────────────────────────────────────
 // Display-Hilfsfunktionen
@@ -565,12 +545,9 @@ void displayMenu() {
     display.setTextColor(SSD1306_WHITE);
     display.setCursor(0, 0);
     display.print(S().menuTitle);
-    const char* modeStr = fbMode == MODE_DIRECT ? "Direct" : "Game";
-    display.setCursor(128 - (int)strlen(modeStr) * 6, 0);
-    display.print(modeStr);
     display.drawFastHLine(0, 9, 128, SSD1306_WHITE);
-    for (int i = 0; i < MENU_ITEM_COUNT; i++) {
-        int y = 11 + i * 8;
+    for (int i = menuScroll; i < menuScroll + MENU_VISIBLE && i < MENU_ITEM_COUNT; i++) {
+        int y = 11 + (i - menuScroll) * 8;
         char buf[22];
         const char* itemText = S().menuItems[i];
         if (i == 5) {
@@ -583,6 +560,12 @@ void displayMenu() {
                 swapSticks ? S().swapOn : S().swapOff);
             itemText = buf;
         }
+        char truncBuf[21];
+        if (strlen(itemText) > 20) {
+            memcpy(truncBuf, itemText, 20);
+            truncBuf[20] = '\0';
+            itemText = truncBuf;
+        }
         if (i == menuSel)
             dispHighlight(y, itemText, 8);
         else {
@@ -590,6 +573,11 @@ void displayMenu() {
             display.print(itemText);
         }
     }
+    // Scrollbar
+    display.drawFastVLine(127, 11, 52, SSD1306_WHITE);
+    uint8_t thumbH = (uint8_t)(52 * MENU_VISIBLE / MENU_ITEM_COUNT);
+    uint8_t thumbY = (uint8_t)(11 + (uint16_t)(52 - thumbH) * menuScroll / (MENU_ITEM_COUNT - MENU_VISIBLE));
+    display.fillRect(126, thumbY, 2, thumbH, SSD1306_WHITE);
     display.display();
 }
 
@@ -745,6 +733,35 @@ int8_t jsMenuX(int16_t rawLX, int16_t rawRX) {
 void sendConfigPacket();  // forward declaration (definiert im ESP-NOW-Block)
 
 // ──────────────────────────────────────────────
+// Display: Debug
+// ──────────────────────────────────────────────
+void displayDebug(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
+                  bool bY, bool bG, bool bB, bool bR) {
+    if (!dispOK) return;
+    static unsigned long lastDebugMs = 0;
+    if (millis() - lastDebugMs < 100) return;
+    lastDebugMs = millis();
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.print("Debug");
+    display.drawFastHLine(0, 9, 128, SSD1306_WHITE);
+    display.setCursor(0, 11); display.printf("LX:%4d  LY:%4d", lx, ly);
+    display.setCursor(0, 19); display.printf("RX:%4d  RY:%4d", rx, ry);
+    display.setCursor(0, 27); display.printf("Y:%d G:%d B:%d R:%d", bY, bG, bB, bR);
+    display.setCursor(0, 35); display.printf("%.2fV %3d%% %s Ch:%d",
+        batVolt, batPct,
+        fbMode == MODE_DIRECT ? "D" : "G",
+        (int)wifi_get_channel());
+    uint8_t curMac[6];
+    wifi_get_macaddr(STATION_IF, curMac);
+    display.setCursor(0, 43); display.printf("%02X:%02X:%02X:%02X:%02X:%02X",
+        curMac[0], curMac[1], curMac[2], curMac[3], curMac[4], curMac[5]);
+    display.display();
+}
+
+// ──────────────────────────────────────────────
 // State Machine
 // *P = Tastendruck (Flanke); bGreen/bBlue zusätzlich als Rohzustand für Combo
 // ──────────────────────────────────────────────
@@ -761,6 +778,7 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
                 if (now - calHoldStart >= CAL_HOLD_MS) {
                     state = STATE_MENU;
                     menuSel = 0;
+                    menuScroll = 0;
                     calHoldStart = 0;
                     ledPink();
                     displayMenu();
@@ -769,7 +787,7 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
             } else {
                 calHoldStart = 0;
             }
-            ledReady();
+            if (paired) ledReady();
             return true;
 
         case STATE_MENU: {
@@ -777,6 +795,8 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
             int8_t dir = jsMenuY(rawLY, rawRY);
             if (dir) {
                 menuSel = constrain(menuSel + dir, 0, MENU_ITEM_COUNT - 1);
+                if (menuSel < menuScroll) menuScroll = menuSel;
+                if (menuSel >= menuScroll + MENU_VISIBLE) menuScroll = menuSel - MENU_VISIBLE + 1;
                 displayMenu();
             }
             if (bYellowP) {
@@ -810,13 +830,17 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
                         break;
                     case 5: // Rumble toggle (temporär, kein EEPROM)
                         rumbleEnabled = !rumbleEnabled;
+                        if (rumbleEnabled) rumbleFbEnd = millis() + 5000;
                         displayMenu();
                         break;
                     case 6: // Joysticks tauschen (temporär, kein EEPROM)
                         swapSticks = !swapSticks;
                         displayMenu();
                         break;
-                    case 7: // Reset
+                    case 7: // Debug
+                        state = STATE_DEBUG;
+                        break;
+                    case 8: // Reset
                         resetSettings();
                         state = STATE_RESET;
                         stateStart = now;
@@ -920,6 +944,10 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
             if (bRedP) { state = STATE_MENU; displayMenu(); }
             return false;
         }
+
+        case STATE_DEBUG:
+            if (bRedP) { state = STATE_MENU; displayMenu(); }
+            return false;
     }
     return true;
 }
@@ -943,13 +971,12 @@ void onDataRecv(uint8_t *senderMac, uint8_t *data, uint8_t len) {
     }
     if (msgType == MSG_FEEDBACK && len >= (int)sizeof(MK_GameFeedback)) {
         const MK_GameFeedback* fb = (const MK_GameFeedback*)data;
-        feedbackRaw.position   = fb->position;
-        feedbackRaw.lap        = fb->lap;
-        feedbackRaw.lapTotal   = fb->lapTotal;
-        feedbackRaw.item       = fb->item;
-        feedbackRaw.speedLimit = fb->speedLimit;
-        feedbackRaw.rumble     = fb->rumble;
-        feedbackRaw.carBat     = fb->carBat;
+        feedbackRaw.position = fb->position;
+        feedbackRaw.lap      = fb->lap;
+        feedbackRaw.lapTotal = fb->lapTotal;
+        feedbackRaw.item     = fb->item;
+        feedbackRaw.rumble   = fb->rumble;
+        feedbackRaw.carBat   = fb->carBat;
         feedbackNew = true;
     } else if (msgType == MSG_CHANNEL_SWITCH && len >= (int)sizeof(MK_ChannelSwitch)) {
         uint8_t ch = ((const MK_ChannelSwitch*)data)->channel;
@@ -1054,7 +1081,7 @@ void sendControlInput(int8_t throttle, int8_t steering,
     pkt.throttle = throttle;
     pkt.steering = steering;
     pkt.buttons  = (bY ? MK_BTN_YELLOW : 0) | (bG ? MK_BTN_GREEN : 0) | (bB ? MK_BTN_BLUE : 0) | (bR ? MK_BTN_RED : 0);
-    pkt.maxSpeed = min((uint8_t)maxSpeed, feedback.speedLimit);
+    pkt.maxSpeed = maxSpeed;
     esp_now_send(peerMac, (uint8_t*)&pkt, sizeof(pkt));
 }
 
@@ -1072,7 +1099,6 @@ void handleFeedback() {
         feedback.lap        = feedbackRaw.lap;
         feedback.lapTotal   = feedbackRaw.lapTotal;
         feedback.item       = feedbackRaw.item;
-        feedback.speedLimit = feedbackRaw.speedLimit;
         feedback.carBat     = feedbackRaw.carBat;
         uint8_t rumbleCmd   = feedbackRaw.rumble;
         feedbackNew = false;
@@ -1105,6 +1131,7 @@ void handleRumbleFb() {
 // ──────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
+    Serial.println("[RESET] " + ESP.getResetReason());
     pinMode(PIN_BTN_YELLOW, INPUT_PULLUP);
     pinMode(PIN_BTN_GREEN,  INPUT_PULLUP);
     pinMode(PIN_BTN_BLUE,   INPUT_PULLUP);
@@ -1263,6 +1290,14 @@ void loop() {
                 bYellow, bGreen, bBlue, bRed
             );
         }
+    }
+
+    if (state == STATE_DEBUG) {
+        displayDebug(
+            mapJS(rawLX, JS_LEFT_X), mapJS(rawLY, JS_LEFT_Y),
+            mapJS(rawRX, JS_RIGHT_X), mapJS(rawRY, JS_RIGHT_Y),
+            bYellow, bGreen, bBlue, bRed
+        );
     }
 
     handleRumbleFb();

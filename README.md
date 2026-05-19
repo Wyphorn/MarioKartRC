@@ -61,7 +61,7 @@ Alle ESP-NOW-Pakete beginnen mit einem `uint8_t type`-Feld als Discriminator.
 
 **MK_ConfigPacket** – Servo-Trim –10..10 (im Auto-EEPROM gespeichert; Basis leitet weiter ans Auto)
 
-**MK_GameFeedback** – Spielzustand: Position, Runde, Item, Rumble-Befehl, Speed-Limit, Akku-Auto (0–5)
+**MK_GameFeedback** – Spielzustand: Position, Runde, Item, Rumble-Befehl, Akku-Auto (0–5)
 
 **MK_Mapping** – Slot-Zuweisung vor Rennstart: slot 1–8 = anzeigen, slot –1 = Mapping beendet
 
@@ -79,8 +79,8 @@ Alle ESP-NOW-Pakete beginnen mit einem `uint8_t type`-Feld als Discriminator.
 | Display | SSD1306 OLED 128×64, I2C 0x3C (Breadboard); geplant: 2.42" SSD1309 |
 | Buttons | 4× Taster, SNES-Farblayout (Raute) |
 | Status-LED | WS2812B RGB |
-| Rumble | Coin-ERM-Vibrationsmotor 10mm (1034-Typ), 5V |
-| Rumble-Treiber | 2N2222 NPN, 1kΩ Basis, 1N4001 Freilaufdiode |
+| Rumble | 2× Zylindrischer ERM-Vibrationsmotor 28×12mm, DC 3–6V, direkt an LiPo VCC |
+| Rumble-Treiber | 2× 2N2222 NPN, 2× 1kΩ Basis, 2× 1N4001 Freilaufdiode |
 | ADC-Teiler | 2× gleiche Widerstände (1k–100k) pro Joystick-Achse |
 | Akku | LiPo 3700mAh + Battery Shield v1.2.0 |
 | Power/Modus | 3-Position Switch (DPDT Center-Off) |
@@ -155,7 +155,7 @@ Im Menü umschaltbar: „Joysticks tauschen" → rechter Stick Y = Throttle, lin
 D8 -- 1kΩ -- Basis(2N2222)
 ```
 
-Motor rot→5V | blau→Kollektor. 220µF Elko auf 5V-Rail gegen Spannungseinbrüche beim Anlaufen.
+Motor rot→LiPo VCC | blau→Kollektor. 220µF Elko auf 5V-Rail. Beide Motoren parallel auf D8.
 
 > D8 (GPIO15) hat internen Pull-Down → Transistor bleibt beim Booten sicher aus.
 > D4 (GPIO2) ist UART1-TX auf dem ESP8266 – nicht für PWM verwenden. WS2812B-Datenpuls funktioniert trotzdem.
@@ -177,6 +177,8 @@ Motor rot→5V | blau→Kollektor. 220µF Elko auf 5V-Rail gegen Spannungseinbr�
 **Grün + Blau gleichzeitig 3 Sekunden halten** öffnet das Menü.  
 Navigation per Joystick (hoch/runter), Gelb = bestätigen, Rot = zurück.
 
+Das Menü ist scrollend (6 von 9 Einträgen sichtbar), Navigation mit Joystick hoch/runter.
+
 | Menüpunkt | Funktion | EEPROM |
 |---|---|---|
 | Offset-Kalibrierung | Nullpunkt setzen (Joysticks loslassen) | ✅ |
@@ -184,8 +186,9 @@ Navigation per Joystick (hoch/runter), Gelb = bestätigen, Rot = zurück.
 | Servo-Trim | ±10 Stufen (wird ans Auto gesendet, dort gespeichert) | ✅ |
 | Max. Speed | 1–10 Stufen (10 = 100 %) | — |
 | Sprache | Deutsch / English | ✅ |
-| Rumble | An/Aus | — |
+| Rumble | An/Aus (5s Bestätigungsvibration beim Aktivieren) | — |
 | Joysticks tauschen | Standard/Getauscht (nur Session) | — |
+| Debug | Live-Anzeige: Achswerte, Buttons, Spannung, Kanal, MAC | — |
 | Reset | Alle Werte zurücksetzen | — |
 
 Beim ersten Start läuft automatisch eine Offset-Kalibrierung (Joysticks loslassen).  
@@ -273,8 +276,11 @@ Noch nicht begonnen. Geplante Komponenten:
 | Kommunikationsprotokoll (`mk_protocol.h`) | ✅ |
 | FB-Firmware: ESP-NOW vollständig (alle 7 Msg-Typen) | ✅ |
 | FB-Firmware: Pairing, Kanal-Persistenz, Reconnect | ✅ |
-| FB-Firmware: Feedback-Empfang (Rumble, Speed-Limit, Akku-Auto) | ✅ |
+| FB-Firmware: Feedback-Empfang (Rumble, Akku-Auto) | ✅ |
 | FB-Firmware: Mapping-Anzeige (Slot-Nummer) | ✅ |
+| FB-Firmware: Scrollendes Menü (9 Einträge, 6 sichtbar) | ✅ |
+| FB-Firmware: Debug-Ansicht (Achsen, Buttons, Spannung, Kanal, MAC) | ✅ |
+| FB-Firmware: Rumble 2× ERM-Motor direkt an LiPo VCC | ✅ |
 | KiCad-Schaltplan FB | ✅ |
 | Display wechseln: 2.42" SSD1309 128×64 I2C | 🚚 bestellt |
 | PCB-Layout (Main / Button / Switch Board) | ⏳ |
