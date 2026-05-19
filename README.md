@@ -48,6 +48,10 @@ Alle ESP-NOW-Pakete beginnen mit einem `uint8_t type`-Feld als Discriminator.
 | `MK_ControlInput` | FB → Auto (Direct) / FB → Basis (Game) | ~50 Hz (20ms) |
 | `MK_ConfigPacket` | FB → Auto / FB → Basis → Auto | Nur bei Änderung |
 | `MK_GameFeedback` | Auto → FB (Direct) / Basis → FB (Game) | ~50 Hz |
+| `MK_Beacon` | FB/Auto → Broadcast | Beim Pairing |
+| `MK_Assign` | Basis → FB/Auto (Unicast) | Beim Pairing |
+| `MK_ChannelSwitch` | Basis → Broadcast | Kanalwechsel / Rennende |
+| `MK_Mapping` | Basis → FB/Auto (Unicast) | Vor Rennstart |
 
 **MK_ControlInput** – Joystick-Steuerdaten:
 - `throttle` – Vorwärts/Rückwärts, –100..100 (Standard: linker Stick Y-Achse)
@@ -55,9 +59,11 @@ Alle ESP-NOW-Pakete beginnen mit einem `uint8_t type`-Feld als Discriminator.
 - `buttons` – Bit 0=Yellow, Bit 1=Green, Bit 2=Blue, Bit 3=Red
 - `maxSpeed` – Fahrer-Präferenz 1–10
 
-**MK_ConfigPacket** – Servo-Trim –10..10 (im Auto-EEPROM gespeichert, nicht im FB)
+**MK_ConfigPacket** – Servo-Trim –10..10 (im Auto-EEPROM gespeichert; Basis leitet weiter ans Auto)
 
-**MK_GameFeedback** – Spielzustand: Position, Runde, Item, Rumble-Befehl, Speed-Limit
+**MK_GameFeedback** – Spielzustand: Position, Runde, Item, Rumble-Befehl, Speed-Limit, Akku-Auto (0–5)
+
+**MK_Mapping** – Slot-Zuweisung vor Rennstart: slot 1–8 = anzeigen, slot –1 = Mapping beendet
 
 ---
 
@@ -158,12 +164,13 @@ Motor rot→5V | blau→Kollektor. 220µF Elko auf 5V-Rail gegen Spannungseinbr�
 
 | Farbe | Bedeutung |
 |---|---|
-| Grün | Direct Mode – verbunden mit Auto |
-| Orange pulsierend | Direct Mode – sucht Auto |
-| Blau | Game Mode – verbunden mit Basisstation |
-| Blau pulsierend | Game Mode – sucht Basisstation |
-| Gelb pulsierend | Kalibrierung ausgelöst (Grün+Blau 3s halten) |
+| Orange pulsierend | Suche / Verbinde (beide Modi) |
+| Grün | Verbunden / Bereit |
+| Pink | Menü offen |
+| Gelb pulsierend | Kalibrierung wird ausgelöst (Grün+Blau 3s halten) |
 | Gelb solid | Kalibrierung läuft – FB gesperrt (mind. 3s) |
+| Orange solid | Akku niedrig |
+| Rot blinkend | Akku kritisch |
 
 ### Einstellungsmenü
 
@@ -262,16 +269,17 @@ Noch nicht begonnen. Geplante Komponenten:
 | FB-Firmware: Peripherie-Guards | ✅ |
 | FB-Firmware: Button-Farbnamen (SNES-Layout) | ✅ |
 | FB-Firmware: Joystick-Tausch (Session-Toggle) | ✅ |
+| FB-Firmware: Loop-Takt 50 Hz (millis + ADS 860 SPS) | ✅ |
 | Kommunikationsprotokoll (`mk_protocol.h`) | ✅ |
+| FB-Firmware: ESP-NOW vollständig (alle 7 Msg-Typen) | ✅ |
+| FB-Firmware: Pairing, Kanal-Persistenz, Reconnect | ✅ |
+| FB-Firmware: Feedback-Empfang (Rumble, Speed-Limit, Akku-Auto) | ✅ |
+| FB-Firmware: Mapping-Anzeige (Slot-Nummer) | ✅ |
 | KiCad-Schaltplan FB | ✅ |
 | Display wechseln: 2.42" SSD1309 128×64 I2C | 🚚 bestellt |
 | PCB-Layout (Main / Button / Switch Board) | ⏳ |
-| ESP-NOW implementieren (FB) | ⏳ |
-| Loop-Takt: delay() → millis()-Timer, 50 Hz | ⏳ |
 | Race-Display: Sprite, Position, Runde, Item | ⏳ |
-| Pairing-Prozess definieren | ⏳ |
 | Receiver-Test Gegenstelle (zweiter D1 Mini) | ⏳ |
-| OLED: Live-Rückmeldung vom Fahrzeug | ⏳ |
 | Gehäuse anpassen (Fusion 360) | ⏳ |
 | Fahrzeug-Firmware (ESP32-C3) | ⏳ |
 | IMU Kollisionserkennung | ⏳ |
