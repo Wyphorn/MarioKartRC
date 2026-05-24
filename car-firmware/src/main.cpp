@@ -411,8 +411,6 @@ static void onRecv(const uint8_t* senderMac, const uint8_t* data, int len) {
             int32_t t     = (int32_t)pkt->throttle * pkt->maxSpeed / 10;
             gThrottle     = (int8_t)constrain(t, -100, 100);
             gSteering     = pkt->steering;
-            if (pkt->buttons != gButtons)
-                Serial.printf("[BTN] 0x%02X\n", pkt->buttons);
             gButtons      = pkt->buttons;
             gLastPacketMs = millis();
             break;
@@ -487,7 +485,6 @@ static void checkCollision() {
     float mag = sqrtf(gx * gx + gy * gy + gz * gz);
 
     uint32_t now = millis();
-    Serial.printf("[IMU] %.2fg\n", mag);
     if (mag > COLLISION_G && (now - gLastCollisionMs > COLLISION_COOLDOWN_MS)) {
         Serial.printf("[IMU] KOLLISION! %.2fg → Rumble 2s\n", mag);
         gLastCollisionMs = now;
@@ -605,10 +602,8 @@ void loop() {
         bool bluePrev = (gPrevButtons & MK_BTN_BLUE) != 0;
         if (blueNow && !bluePrev) {
             const CharSounds& s = kSounds[gCharFolder - 1];
-            Serial.printf("[SND] folder=%d joyCount=%d\n", gCharFolder, s.joyCount);
             if (s.joyCount > 0) {
                 uint8_t track = s.joy[random(s.joyCount)];
-                Serial.printf("[SND] playFolder(%d, %d)\n", gCharFolder, track);
                 gDf.playFolder(gCharFolder, track);
             }
         }
