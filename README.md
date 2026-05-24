@@ -9,8 +9,7 @@ Mario-Kart-inspiriertes RC-Rennsystem für 8 Fahrzeuge im Außeneinsatz. Die Aut
 | Ordner | Inhalt |
 |---|---|
 | `fb-firmware/` | Fernbedienung – D1 Mini (ESP8266), PlatformIO |
-| `car-firmware/` | Fahrzeug-Firmware – ESP32-C3 (noch nicht begonnen) |
-| `receiver-test/` | Gegenstelle – D1 Mini empfängt ESP-NOW, Serial-Output |
+| `car-firmware/` | Fahrzeug-Firmware – ESP32-C3, PlatformIO |
 | `shared/` | Gemeinsamer Code – `mk_protocol.h` (Datenstrukturen FB ↔ Auto ↔ Basis) |
 | `docs/` | Schaltpläne, KiCad-Dateien |
 
@@ -24,14 +23,12 @@ Mario-Kart-inspiriertes RC-Rennsystem für 8 Fahrzeuge im Außeneinsatz. Die Aut
 | Kabelgebunden | CAN-Bus (STM32F103 + TJA1050) |
 | Basisstation | Raspberry Pi 5 + USB-CAN-Adapter |
 | Fahrzeugbasis | Carrera 2013 RC-Autos (umgebaut) |
-| Fahrzeug-MCU | ESP32-C3 |
+| Fahrzeug-MCU | ESP32-C3 SuperMini |
 | Fernbedienung | D1 Mini (ESP8266) |
 
 ---
 
 ## Betriebs-Modi
-
-Die Fernbedienung unterstützt zwei Modi, wählbar über den 3-Position-Schalter:
 
 **Direct Mode** – FB kommuniziert direkt mit dem zugeordneten Auto. Keine Basisstation nötig, ideal zum Einzelfahren und Testen.
 
@@ -45,25 +42,28 @@ Alle ESP-NOW-Pakete beginnen mit einem `uint8_t type`-Feld als Discriminator.
 
 | Struct | Richtung | Frequenz |
 |---|---|---|
-| `MK_ControlInput` | FB → Auto (Direct) / FB → Basis (Game) | ~50 Hz (20ms) |
+| `MK_ControlInput` | FB → Auto (Direct) / FB → Basis (Game) | ~50 Hz |
 | `MK_ConfigPacket` | FB → Auto / FB → Basis → Auto | Nur bei Änderung |
-| `MK_GameFeedback` | Auto → FB (Direct) / Basis → FB (Game) | ~50 Hz |
+| `MK_GameFeedback` | Auto → FB (Direct) / Basis → FB (Game) | 5 Hz |
 | `MK_Beacon` | FB/Auto → Broadcast | Beim Pairing |
 | `MK_Assign` | Basis → FB/Auto (Unicast) | Beim Pairing |
 | `MK_ChannelSwitch` | Basis → Broadcast | Kanalwechsel / Rennende |
 | `MK_Mapping` | Basis → FB/Auto (Unicast) | Vor Rennstart |
+| `MK_IrConfig` | Basis → Auto (Unicast) | Nach Assign (Game Mode) |
 
 **MK_ControlInput** – Joystick-Steuerdaten:
-- `throttle` – Vorwärts/Rückwärts, –100..100 (Standard: linker Stick Y-Achse)
-- `steering` – Links/Rechts, –100..100 (Standard: rechter Stick X-Achse)
-- `buttons` – Bit 0=Yellow, Bit 1=Green, Bit 2=Blue, Bit 3=Red
+- `throttle` – Vorwärts/Rückwärts, –100..100
+- `steering` – Links/Rechts, –100..100
+- `buttons` – Bitmask: `MK_BTN_YELLOW` | `MK_BTN_GREEN` | `MK_BTN_BLUE` | `MK_BTN_RED`
 - `maxSpeed` – Fahrer-Präferenz 1–10
 
-**MK_ConfigPacket** – Servo-Trim –10..10 (im Auto-EEPROM gespeichert; Basis leitet weiter ans Auto)
+**MK_ConfigPacket** – Servo-Trim –10..10 (im Auto-EEPROM gespeichert)
 
 **MK_GameFeedback** – Spielzustand: Position, Runde, Item, Rumble-Befehl, Akku-Auto (0–5)
 
-**MK_Mapping** – Slot-Zuweisung vor Rennstart: slot 1–8 = anzeigen, slot –1 = Mapping beendet
+**MK_Beacon** – enthält `charId` (1–8) beim Auto, damit Basis/FB den Charakter kennt
+
+**MK_IrConfig** – aktiviert IR-Aussendung mit Fahrzeug-ID 1–8; nur im Game Mode gesendet. Rennende (MSG_CHANNEL_SWITCH mit channel=1) deaktiviert IR implizit.
 
 ---
 
@@ -81,9 +81,9 @@ Alle ESP-NOW-Pakete beginnen mit einem `uint8_t type`-Feld als Discriminator.
 | Status-LED | WS2812B RGB |
 | Rumble | 2× Zylindrischer ERM-Vibrationsmotor 28×12mm, DC 3–6V, direkt an LiPo VCC |
 | Rumble-Treiber | 2× 2N2222 NPN, 2× 1kΩ Basis, 2× 1N4001 Freilaufdiode |
-| ADC-Teiler | 2× gleiche Widerstände (1k–100k) pro Joystick-Achse |
+| ADC-Teiler | 2× 4,7kΩ pro Joystick-Achse (5V→~2,5V am ADS) |
 | Akku | LiPo 3700mAh + Battery Shield v1.2.0 |
-| Power/Modus | 3-Position Switch (DPDT Center-Off) |
+| Power/Modus | 3-Position Switch (SPDT Center-Off): Mitte=Aus, Links=Game, Rechts=Direct |
 | Puffer | 220µF Elko auf 5V-Rail |
 
 ### Pinbelegung D1 Mini
@@ -93,17 +93,15 @@ Alle ESP-NOW-Pakete beginnen mit einem `uint8_t type`-Feld als Discriminator.
 | D0 | Modus-Erkennung (Game=GND / Direct=3.3V) |
 | D1 | SCL (I2C) |
 | D2 | SDA (I2C) |
-| D3 | Button Red (TBD PCB) |
+| D3 | Button 4 |
 | D4 | WS2812B Datenleitung |
-| D5 | Button Yellow (TBD PCB) |
-| D6 | Button Green (TBD PCB) |
-| D7 | Button Blue (TBD PCB) |
+| D5 | Button 1 |
+| D6 | Button 2 |
+| D7 | Button 3 |
 | D8 | Rumble PWM (via 2N2222) |
 | 5V | Joystick VCC, Rumble-Motor |
 | 3.3V | ADS1115, OLED, WS2812B |
 | GND | Alle gemeinsam |
-
-> Die endgültige Farb-Pin-Zuordnung wird beim PCB-Layout festgelegt, wenn die Leiterbahnen vom Button-Board zum Main-Board definiert werden.
 
 ### Button-Layout (SNES-Raute)
 
@@ -117,145 +115,157 @@ Alle ESP-NOW-Pakete beginnen mit einem `uint8_t type`-Feld als Discriminator.
 |---|---|---|
 | Gelb (unten) | Bestätigen | TBD |
 | Grün (links) | — (Combo) | TBD |
-| Blau (oben) | — (Combo) | TBD |
+| Blau (oben) | — (Combo) | Charakter-Sound |
 | Rot (rechts) | Zurück / Abbrechen | TBD |
 | Grün + Blau (3s) | Menü öffnen | — |
-
-### Power/Modus-Schalter
-
-```
-LiPo(+) → Schalter-Mitte (gemeinsam)
-           ├── Links  → Shield(+)  UND  D0 → GND    = Game Mode
-           └── Rechts → Shield(+)  UND  D0 → 3.3V   = Direct Mode
-           Mitte = Aus (Stromkreis offen)
-```
-
-### Joystick Spannungsteiler
-
-PS2-Joysticks liefern bis 5V, ADS1115 verträgt max 3,6V (GAIN_ONE: ±4,096V Referenz).
-
-Pro Achse: `Signal --[R]--+--[R]-- GND`, Mitte → ADS-Eingang.
-
-Beide Widerstände müssen gleich sein, der absolute Wert ist egal (1kΩ–100kΩ):
-
-```
-V_out = 5V × R/(R+R) = 5V × 0,5 = 2,5V  →  ADS-Rohwert ≈ 19989
-```
-
-### Joystick-Achsenzuordnung
-
-Standard: linker Stick Y-Achse = Throttle, rechter Stick X-Achse = Steering.
-
-Im Menü umschaltbar: „Joysticks tauschen" → rechter Stick Y = Throttle, linker Stick X = Steering. Nur für die laufende Session, nicht im EEPROM gespeichert.
-
-### Rumble-Schaltung
-
-```
-5V -- Motor -- 1N4001(Kathode zu 5V) -- Kollektor(2N2222) -- Emitter -- GND
-D8 -- 1kΩ -- Basis(2N2222)
-```
-
-Motor rot→LiPo VCC | blau→Kollektor. 220µF Elko auf 5V-Rail. Beide Motoren parallel auf D8.
-
-> D8 (GPIO15) hat internen Pull-Down → Transistor bleibt beim Booten sicher aus.
-> D4 (GPIO2) ist UART1-TX auf dem ESP8266 – nicht für PWM verwenden. WS2812B-Datenpuls funktioniert trotzdem.
 
 ### WS2812B Status-LED
 
 | Farbe | Bedeutung |
 |---|---|
-| Orange pulsierend | Suche / Verbinde (beide Modi) |
-| Grün | Verbunden / Bereit |
+| Orange blinkend | Suche / Verbinde |
+| Grün | Verbunden |
 | Pink | Menü offen |
-| Gelb pulsierend | Kalibrierung wird ausgelöst (Grün+Blau 3s halten) |
-| Gelb solid | Kalibrierung läuft – FB gesperrt (mind. 3s) |
+| Gelb pulsierend | Kalibrierung wird ausgelöst |
+| Gelb solid | Kalibrierung läuft |
 | Orange solid | Akku niedrig |
 | Rot blinkend | Akku kritisch |
 
 ### Einstellungsmenü
 
-**Grün + Blau gleichzeitig 3 Sekunden halten** öffnet das Menü.  
-Navigation per Joystick (hoch/runter), Gelb = bestätigen, Rot = zurück.
+**Grün + Blau gleichzeitig 3 Sekunden halten** öffnet das Menü.
 
-Das Menü ist scrollend (6 von 9 Einträgen sichtbar), Navigation mit Joystick hoch/runter.
-
-| Menüpunkt | Funktion | EEPROM |
-|---|---|---|
-| Offset-Kalibrierung | Nullpunkt setzen (Joysticks loslassen) | ✅ |
-| Min/Max-Kalibrierung | 8 Schritte: jeden Stick in jede Richtung durchdrücken | ✅ |
-| Servo-Trim | ±10 Stufen (wird ans Auto gesendet, dort gespeichert) | ✅ |
-| Max. Speed | 1–10 Stufen (10 = 100 %) | — |
-| Sprache | Deutsch / English | ✅ |
-| Rumble | An/Aus (5s Bestätigungsvibration beim Aktivieren) | — |
-| Joysticks tauschen | Standard/Getauscht (nur Session) | — |
-| Debug | Live-Anzeige: Achswerte, Buttons, Spannung, Kanal, MAC | — |
-| Reset | Alle Werte zurücksetzen | — |
-
-Beim ersten Start läuft automatisch eine Offset-Kalibrierung (Joysticks loslassen).  
-**Rot beim Einschalten gedrückt halten** → sofortiger EEPROM-Reset.  
-**Rot 10 Sekunden halten** (im Betrieb) → EEPROM-Reset mit Countdown ab 5s.
-
-### Joystick-Kalibrierung
-
-Ausgabe: –100…+100 pro Achse. Positive und negative Richtung werden separat skaliert (asymmetrisches Mapping), damit auch ungleichmäßige Joysticks den vollen Bereich erreichen. Dead Zone ±6.
-
-### OLED-Display (Normalbetrieb)
-
-```
-LX: -12  LY:   3
-RX:   0  RY:  -5
-Y:0 G:0 B:0 R:0   [Akku]
-```
+| Menüpunkt | EEPROM |
+|---|---|
+| Offset-Kalibrierung (Nullpunkt) | ✅ |
+| Min/Max-Kalibrierung (8 Schritte) | ✅ |
+| Servo-Trim (±10 Stufen, ans Auto gesendet) | ✅ |
+| Max. Speed (1–10) | — |
+| Sprache (DE/EN) | ✅ |
+| Rumble (An/Aus) | — |
+| Joysticks tauschen (Session) | — |
+| Debug (Live-Anzeige) | — |
+| Reset (EEPROM löschen) | — |
 
 ### FB-Firmware bauen & flashen
 
 ```bash
 cd fb-firmware
-
-# Port-Berechtigung (einmalig pro Session bis uucp-Gruppe gesetzt)
-sudo chmod 666 /dev/ttyUSB0
-
 ~/.platformio/penv/bin/pio run -t upload
 ~/.platformio/penv/bin/pio device monitor
 ```
 
-> Dauerhaft ohne chmod: `sudo usermod -aG uucp $USER` (danach ausloggen)
-
 ---
 
-## PCB-Aufteilung (geplant)
+## Fahrzeug
 
-| Board | Inhalt |
-|---|---|
-| Main-Board | D1 Mini, ADS1115, Rumble-Schaltung (2N2222, Dioden, R, C), alle JST-Ausgänge |
-| Button-Board | 4× 12×12×5mm Taster, JST zum Main-Board |
-| Switch-Board | 3-Position-Schalter, JST zum Main-Board |
-
-Display und Joysticks kommen als fertige Module mit JST-Kabel (kein eigenes PCB).  
-Verbindungen zwischen Boards: JST-XH 2.54mm.
-
-Schaltplan: `docs/fb-schematic.kicad_sch` (KiCad 10, generiert via `docs/generate_schematic.py`)
-
----
-
-## Gehäuse
-
-- PS5-Controller-Ober/Unterschale als Basis
-- Redesign in Fusion 360 (Löcher schließen, neue für Display/Sticks/Buttons/Schalter/LED/USB-C)
-- TPU-gedruckte Buttonmatten in SNES-Farben (Gelb/Grün/Blau/Rot) über den Tastern
-
----
-
-## Fahrzeug (ESP32-C3)
-
-Noch nicht begonnen. Geplante Komponenten:
+### Hardware
 
 | Komponente | Details |
 |---|---|
-| MCU | ESP32-C3 |
-| Sound | MAX98357A (I2S) |
-| IMU | LSM6DSO (I2C, Kollisionserkennung) |
+| MCU | ESP32-C3 SuperMini |
+| Motortreiber | BTS7960 H-Bridge, 43A Peak |
+| Audio | DFPlayer Mini (UART GPIO20/21) – Sounds aus Ordner pro Charakter |
+| IMU | LSM6DS3 I2C 0x6A – Kollisionserkennung (WHO_AM_I=0x69) |
+| LEDs | WS2812B – 8 LEDs Charakterkopf + 1 Status-LED |
+| Lenkservo | Multiplex MS-12022 MG DIGI, PWM 1000–2000µs |
+| IR-Sender | 3× IR-LED 940nm ±40°, nach unten (Mitte + ±8cm lateral) |
+| Charakter-ID | 4-Pin DIP-Schalter + Widerstandsnetzwerk, 1 ADC-Pin |
+| Batterie-ADC | 1 Pin – Spannungsüberwachung per Spannungsteiler |
 | Wireless | ESP-NOW |
+
+### Pinbelegung ESP32-C3 SuperMini
+
+| GPIO | Funktion |
+|---|---|
+| GPIO0 | ADC – Charakter-ID (DIP-Schalter) |
+| GPIO1 | ADC – Batterie-Monitor |
+| GPIO3 | BTS7960 RPWM |
+| GPIO4 | BTS7960 LPWM |
+| GPIO6 | I2C SCL (LSM6DS3) |
+| GPIO7 | I2C SDA (LSM6DS3) |
+| GPIO8 | WS2812B DATA |
+| GPIO9 | IR LED (via MMBT2222) |
+| GPIO10 | Servo PWM |
+| GPIO20 | UART1 RX ← DFPlayer TX |
+| GPIO21 | UART1 TX → DFPlayer RX |
+
+### Charakter-Identifikation (DIP-Schalter)
+
+10kΩ Festwiderstand nach 3.3V, 4 Widerstände (3.3k / 10k / 20k / 51k) je per DIP-Schalter nach GND. ADC-Scale-Faktor 2.985f (ESP32-C3 bei ADC_11db max ~2.985V). Rosalina (3.3V) saturiert den ADC → wird via `raw > 3940` erkannt.
+
+| Charakter | DIP [3.3k 10k 20k 51k] | Spannung | DFPlayer-Ordner |
+|---|---|---|---|
+| Mario    | 1110 | 0.597V | 01 |
+| Luigi    | 1000 | 0.819V | 02 |
+| Yoshi    | 0110 | 1.320V | 03 |
+| Bowser   | 0100 | 1.650V | 04 |
+| DK       | 0011 | 1.946V | 05 |
+| Peach    | 0010 | 2.200V | 06 |
+| Toad     | 0001 | 2.759V | 07 |
+| Rosalina | 0000 | 3.300V | 08 |
+
+### DFPlayer SD-Karten-Struktur
+
+```
+/01/   001.mp3, 002.mp3, …   ← Mario
+/02/   001.mp3, …             ← Luigi
+…
+/08/   001.mp3, …             ← Rosalina
+/09/   001.mp3, …             ← Game-Sounds (Stern, Banane, …)
+```
+
+Track-Nummern in den `kJoy_*` / `kSad_*` Arrays am Anfang von `car-firmware/src/main.cpp` pflegen. Blauer Knopf → zufälliger Joy-Sound des aktuellen Charakters.
+
+### LED-Layout
+
+| Index | Funktion |
+|---|---|
+| 0–7 | Charakter-Kreis (8 LEDs im Charakterkopf) |
+| 8 | Status-LED |
+
+| Status-LED | Bedeutung |
+|---|---|
+| Orange blinkend | Suche / Koppeln |
+| Grün | Verbunden |
+| Gelb | Akku < 33% |
+| Rot blinkend | Akku < 16% |
+
+### Kollisionserkennung
+
+IMU LSM6DS3, ±16g-Range. Threshold: 6g (Tuning nach Fahrtest). Bei Auslösung: 2s Rumble im gekoppelten FB, 3s Cooldown.
+
+### Fahrzeug-Firmware bauen & flashen
+
+```bash
+cd car-firmware
+pio run -t upload
+pio device monitor
+```
+
+---
+
+## Streckeninfrastruktur & IR-System
+
+| Komponente | Funktion |
+|---|---|
+| TSOP38238 | IR-Empfänger, 38kHz, ±45° – in Toren und Bodenplatten |
+| STM32F103 + TJA1050 | CAN-Controller + Transceiver in Tor-Nodes |
+| RPi5 + USB-CAN | Basisstation / Spielserver |
+
+**Kommunikationsweg:** Auto fährt über Bodenplatte → TSOP38238 erkennt IR-ID → STM32 → CAN → RPi5 → Spiellogik
+
+---
+
+## PCB-Aufteilung FB (geplant)
+
+| Board | Inhalt |
+|---|---|
+| Main-Board | D1 Mini, ADS1115, Rumble-Schaltung, alle JST-Ausgänge |
+| Button-Board | 4× 12×12×5mm Taster, JST zum Main-Board |
+| Switch-Board | 3-Position-Schalter, JST zum Main-Board |
+
+Schaltplan: `docs/fb-schematic.kicad_sch`
 
 ---
 
@@ -264,32 +274,22 @@ Noch nicht begonnen. Geplante Komponenten:
 | Schritt | Status |
 |---|---|
 | Architektur & Komponentenwahl | ✅ |
-| Breadboard-Aufbau FB | ✅ |
-| FB-Firmware: Joysticks, Buttons, Rumble, OLED | ✅ |
-| FB-Firmware: WS2812B Status-LED | ✅ |
-| FB-Firmware: Joystick-Kalibrierung + EEPROM | ✅ |
-| FB-Firmware: Einstellungsmenü | ✅ |
-| FB-Firmware: Peripherie-Guards | ✅ |
-| FB-Firmware: Button-Farbnamen (SNES-Layout) | ✅ |
-| FB-Firmware: Joystick-Tausch (Session-Toggle) | ✅ |
-| FB-Firmware: Loop-Takt 50 Hz (millis + ADS 860 SPS) | ✅ |
 | Kommunikationsprotokoll (`mk_protocol.h`) | ✅ |
-| FB-Firmware: ESP-NOW vollständig (alle 7 Msg-Typen) | ✅ |
-| FB-Firmware: Pairing, Kanal-Persistenz, Reconnect | ✅ |
-| FB-Firmware: Feedback-Empfang (Rumble, Akku-Auto) | ✅ |
-| FB-Firmware: Mapping-Anzeige (Slot-Nummer) | ✅ |
-| FB-Firmware: Scrollendes Menü (9 Einträge, 6 sichtbar) | ✅ |
-| FB-Firmware: Debug-Ansicht (Achsen, Buttons, Spannung, Kanal, MAC) | ✅ |
-| FB-Firmware: Rumble 2× ERM-Motor direkt an LiPo VCC | ✅ |
+| FB-Firmware: vollständig (Joysticks, Display, Menü, ESP-NOW, Rumble) | ✅ |
 | KiCad-Schaltplan FB | ✅ |
-| Display wechseln: 2.42" SSD1309 128×64 I2C | 🚚 bestellt |
-| PCB-Layout (Main / Button / Switch Board) | ⏳ |
+| Auto-Peripherie POC (alle Komponenten getestet) | ✅ |
+| Auto-Firmware: vollständig (ESP-NOW, Motor, Servo, LED, IMU, Sound) | ✅ |
+| Direct Mode End-to-End (FB ↔ Auto) | ✅ |
+| Display wechseln: 2.42" SSD1309 | 🚚 bestellt |
+| Multiplex MS-12022 Servo einbauen | ⏳ |
+| Batterie-ADC verdrahten | ⏳ |
+| IR-LED einbauen + 38kHz-Modulation | ⏳ |
+| Sound-Arrays befüllen (alle Charaktere) | ⏳ |
+| PCB-Layout FB | ⏳ |
 | Race-Display: Sprite, Position, Runde, Item | ⏳ |
-| Receiver-Test Gegenstelle (zweiter D1 Mini) | ⏳ |
 | Gehäuse anpassen (Fusion 360) | ⏳ |
-| Fahrzeug-Firmware (ESP32-C3) | ⏳ |
-| IMU Kollisionserkennung | ⏳ |
 | Basisstation-Software (Raspberry Pi) | ⏳ |
+| Game Mode End-to-End | ⏳ |
 
 ---
 
@@ -298,12 +298,12 @@ Noch nicht begonnen. Geplante Komponenten:
 | Option | Grund |
 |---|---|
 | UWB für Positionierung | Zu komplex |
-| DFPlayer Mini | Sound kommt direkt vom Auto via MAX98357A |
+| MAX98357A (I2S) für Auto-Sound | DFPlayer Mini gewählt – einfacher, vorhanden |
+| DRV8833 für Motortreiber | Max. 1.5A vs. 8A Stallstrom des Motors |
 | MOSFET IRFZ44N/RFP30N06LE für Rumble | Nicht Logic-Level / zu groß |
-| Piezo-Buzzer in FB | Kein Sound in der FB geplant |
+| Piezo-Buzzer in FB | Kein Sound in der FB |
 | ESP32 für Fernbedienung | D1 Mini aus Lager, ausreichend |
 | D4 für Rumble | UART1-Interferenz auf GPIO2 |
-| D8 für Button | GPIO15 Pull-Down, INPUT_PULLUP funktioniert nicht zuverlässig |
-| 3.3V für Rumble-Motor | Zu schwach, jetzt 5V |
-| Farb-TFT (ILI9341/ST7789) für Race-Display | Hardware-SPI-Pins durch Buttons belegt; stattdessen größeres OLED gleicher Auflösung |
-| 10kΩ ADC-Teiler | Zu wenige im Lager (beliebiger gleicher Wert funktioniert) |
+| 3.3V für Rumble-Motor | Zu schwach |
+| Farb-TFT für Race-Display | SPI-Pins belegt; stattdessen größeres OLED |
+| VSMA1094750X02 / TSAL6200 als IR-Sender | Falscher Abstrahlwinkel / existiert nicht |

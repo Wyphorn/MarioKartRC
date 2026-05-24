@@ -16,6 +16,8 @@ enum MK_MsgType : uint8_t {
                                  // At race end: base sends MSG_CHANNEL_SWITCH with channel=MK_ESPNOW_CHANNEL
                                  // so all devices return to channel 1 and persist it — next boot starts clean.
     MSG_MAPPING        = 0x13,   // Basis → FB/Auto (Unicast) — mapping process: show slot number/color
+    MSG_IR_CONFIG      = 0x14,   // Basis → Auto (Unicast) — activates IR transmission with vehicle ID
+                                 // Direct Mode: never sent → IR stays off
 };
 
 // ── Device types ─────────────────────────────────────────────────────────────
@@ -57,6 +59,7 @@ enum MK_DeviceType : uint8_t {
 struct MK_ChannelSwitch {
     uint8_t type    = MSG_CHANNEL_SWITCH;
     uint8_t channel;  // Target channel 1–13
+    // Cars: if channel == MK_ESPNOW_CHANNEL (race end), deactivate IR (irId = 0).
 };
 
 // ── Mapping process ───────────────────────────────────────────────────────────
@@ -83,6 +86,18 @@ static const uint8_t MK_MAPPING_COLORS[8][3] = {
     {255,   0, 255},  // 6 – Magenta
     {255, 128,   0},  // 7 – Orange
     {255, 255, 255},  // 8 – Weiß
+};
+
+// ── IR configuration ─────────────────────────────────────────────────────────
+// Sent by base station after Assign to enable IR transmission on the car.
+// Direct Mode: never sent → IR stays off.
+// At race end: base sends MSG_CHANNEL_SWITCH with channel=MK_ESPNOW_CHANNEL —
+// cars MUST deactivate IR on receiving this packet (irId implicitly = 0).
+// IR can also be explicitly deactivated by sending irId = 0.
+
+struct MK_IrConfig {
+    uint8_t type  = MSG_IR_CONFIG;
+    uint8_t irId;  // 0 = deactivate, 1–8 = vehicle ID to transmit
 };
 
 // ── Base station MAC address ──────────────────────────────────────────────────
@@ -177,6 +192,7 @@ struct MK_GameFeedback {
 struct MK_Beacon {
     uint8_t  type       = MSG_BEACON;
     uint8_t  deviceType;  // MK_DeviceType: DEVICE_FB or DEVICE_CAR
+    uint8_t  charId;      // 1–8 (car only, matches DFPlayer folder); 0 if not applicable
 };
 
 struct MK_Assign {
