@@ -200,3 +200,61 @@ struct MK_Assign {
     uint8_t  slot;        // Assigned slot 1–8
     uint8_t  baseMac[6]; // Target MAC for all future TX — base station (Game) or FB (Direct)
 };
+
+// ── Base station architecture (multi-S3) ─────────────────────────────────────
+// The Game Mode base station consists of:
+//   3× ESP32-S3 (active relays) + 1× ESP32-S3 (hot standby), all USB-connected to RPi5.
+//
+// Each active S3:
+//   • Spoofs MAC to MK_BASE_MAC on boot
+//   • Operates on a dedicated non-overlapping channel (S3-1: CH1, S3-2: CH6, S3-3: CH11)
+//   • Relays traffic between FB and car — receives MK_ControlInput from FB,
+//     applies game effects (speedFactor, invertSteering, maxSpeedOverride),
+//     forwards modified packet to car. FB and car firmware are unaware of this.
+//   • Receives game state updates from RPi via USB Serial (S3_GameState)
+//
+// Failover:
+//   RPi detects failure via USB disconnect (immediate — no heartbeat timeout needed).
+//   RPi sends channel + vehicle assignments + game states to standby S3.
+//   Standby spoofs same MAC on same channel → cars/FBs notice nothing, no re-pairing.
+//   S3_Heartbeat (500ms) additionally catches firmware hangs (connected but frozen).
+//
+// See docs/base-station.md for full architecture.
+
+// ── USB Serial protocol (RPi ↔ S3) ───────────────────────────────────────────
+// Binary protocol over USB CDC. Every message starts with a uint8_t type.
+// Framing: struct size is implicit from the known type — no length byte needed.
+
+enum S3_MsgType : uint8_t {
+    S3_ASSIGN     = 0x01,  // RPi → S3: assign a FB+car pair to this S3
+    S3_GAMESTATE  = 0x02,  // RPi → S3: update game effects for one car
+    S3_STATUS     = 0x03,  // S3 → RPi: relay car feedback (battery, rumble)
+    S3_HEARTBEAT  = 0x04,  // S3 → RPi: liveness ping every 500ms
+};
+
+struct S3_Assign {
+    uint8_t type    = S3_ASSIGN;
+    uint8_t slot;           // 1–8
+    uint8_t carMac[6];
+    uint8_t fbMac[6];
+    uint8_t channel;        // Operational channel for this pair
+};
+
+struct S3_GameState {
+    uint8_t type    = S3_GAMESTATE;
+    uint8_t slot;               // 1–8: which car
+    int8_t  speedFactor;        // Additive throttle offset -100..100 (malus/bonus)
+    uint8_t invertSteering;     // 1 = invert steering, 0 = normal
+    uint8_t maxSpeedOverride;   // 1–10 overrides player maxSpeed; 0 = use player value
+};
+
+struct S3_Status {
+    uint8_t type    = S3_STATUS;
+    uint8_t slot;
+    uint8_t carBat;   // Relayed from MK_GameFeedback.carBat
+    uint8_t rumble;   // Relayed from MK_GameFeedback.rumble
+};
+
+struct S3_Heartbeat {
+    uint8_t type = S3_HEARTBEAT;
+};

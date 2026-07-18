@@ -21,36 +21,36 @@ struct CharSounds {
 };
 
 // Mario (folder 01)
-static const uint8_t kJoy_Mario[] = {1};
-static const uint8_t kSad_Mario[] = {};
+static const uint8_t kJoy_Mario[] = {1,2,4};
+static const uint8_t kSad_Mario[] = {3,5};
 
-// Luigi (folder 02)
-static const uint8_t kJoy_Luigi[] = {};
-static const uint8_t kSad_Luigi[] = {};
+// Yoshi (folder 02)
+static const uint8_t kJoy_Yoshi[] = {1,2,4};
+static const uint8_t kSad_Yoshi[] = {3,5};
 
-// Yoshi (folder 03)
-static const uint8_t kJoy_Yoshi[] = {};
-static const uint8_t kSad_Yoshi[] = {};
+// Bowser (folder 03)
+static const uint8_t kJoy_Bowser[] = {1,4};
+static const uint8_t kSad_Bowser[] = {2,3,5};
 
-// Bowser (folder 04)
-static const uint8_t kJoy_Bowser[] = {};
-static const uint8_t kSad_Bowser[] = {};
+// DK (folder 04)
+static const uint8_t kJoy_DK[] = {1,3,5};
+static const uint8_t kSad_DK[] = {2,4};
 
-// DK (folder 05)
-static const uint8_t kJoy_DK[] = {};
-static const uint8_t kSad_DK[] = {};
+// Luigi (folder 05)
+static const uint8_t kJoy_Luigi[] = {1,2,4};
+static const uint8_t kSad_Luigi[] = {3,5};
 
 // Peach (folder 06)
-static const uint8_t kJoy_Peach[] = {};
-static const uint8_t kSad_Peach[] = {};
+static const uint8_t kJoy_Peach[] = {1,2,4};
+static const uint8_t kSad_Peach[] = {3,5};
 
 // Toad (folder 07)
-static const uint8_t kJoy_Toad[] = {};
-static const uint8_t kSad_Toad[] = {};
+static const uint8_t kJoy_Toad[] = {1,2,4};
+static const uint8_t kSad_Toad[] = {4,5};
 
 // Rosalina (folder 08)
-static const uint8_t kJoy_Rosalina[] = {};
-static const uint8_t kSad_Rosalina[] = {};
+static const uint8_t kJoy_Rosalina[] = {1,2,4};
+static const uint8_t kSad_Rosalina[] = {4,5};
 
 // ── Game sounds (folder 09) ───────────────────────────────────────────────────
 // Charakter-unabhängige Sounds, ausgelöst durch Spielereignisse (Item etc.).
@@ -59,8 +59,8 @@ static const uint8_t kSad_Rosalina[] = {};
 
 static constexpr uint8_t FOLDER_GAME  = 9;
 
-static constexpr uint8_t SND_STAR     = 1;   // 001.mp3 – Stern
-static constexpr uint8_t SND_BANANA   = 2;   // 002.mp3 – Banane ablegen
+static constexpr uint8_t SND_STAR     = 2;   // 001.mp3 – Stern
+static constexpr uint8_t SND_BANANA   = 1;   // 002.mp3 – Banane ablegen
 static constexpr uint8_t SND_SHELL    = 0;   // noch nicht belegt
 static constexpr uint8_t SND_BOOST    = 0;   // noch nicht belegt
 static constexpr uint8_t SND_FINISH   = 0;   // noch nicht belegt
@@ -68,10 +68,10 @@ static constexpr uint8_t SND_FINISH   = 0;   // noch nicht belegt
 #define SOUNDS(chr) { kJoy_##chr, sizeof(kJoy_##chr), kSad_##chr, sizeof(kSad_##chr) }
 static const CharSounds kSounds[8] = {
     SOUNDS(Mario),
-    SOUNDS(Luigi),
     SOUNDS(Yoshi),
     SOUNDS(Bowser),
     SOUNDS(DK),
+    SOUNDS(Luigi),
     SOUNDS(Peach),
     SOUNDS(Toad),
     SOUNDS(Rosalina),
@@ -79,28 +79,34 @@ static const CharSounds kSounds[8] = {
 #undef SOUNDS
 
 // ── Pins ─────────────────────────────────────────────────────────────────────
-static constexpr int PIN_ADC_CHAR = 0;
-static constexpr int PIN_ADC_BAT  = 1;
-static constexpr int PIN_DF_TX    = 21;  // ESP32 TX → DFPlayer RX
+static constexpr int PIN_ADC_CHAR = 2;
+static constexpr int PIN_ADC_BAT  = 0;
+static constexpr int PIN_DF_TX    = 15;  // ESP32 TX → DFPlayer RX
 static constexpr int PIN_RPWM     = 3;
 static constexpr int PIN_LPWM     = 4;
-static constexpr int PIN_DF_RX    = 20;  // ESP32 RX ← DFPlayer TX
+static constexpr int PIN_DF_RX    = 14;  // ESP32 RX ← DFPlayer TX
 static constexpr int PIN_SCL      = 6;
 static constexpr int PIN_SDA      = 7;
-static constexpr int PIN_LED      = 8;
-static constexpr int PIN_IR       = 9;
-static constexpr int PIN_SERVO    = 10;
+static constexpr int PIN_LED      = 1;
+static constexpr int PIN_IR       = 19;
+static constexpr int PIN_SERVO    = 5;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 static constexpr int LED_COUNT    = 9;
-static constexpr int CH_RPWM      = 2;   // LEDC ch 2/3 — ch 0/1 claimed by ESP32Servo
-static constexpr int CH_LPWM      = 3;
 static constexpr uint8_t LSM_ADDR = 0x6A;
 
 // Servo limits with 5° mechanical buffer (1000–2000 → 1050–1950)
 static constexpr int SERVO_MIN_US = 1050;
 static constexpr int SERVO_MAX_US = 1950;
 static constexpr int SERVO_MID_US = 1500;
+
+// ── Battery thresholds (2S LiPo / 2× 18650) ──────────────────────────────────
+// Spannungsteiler: R1 (VBat→ADC) + R2 (ADC→GND) — Werte anpassen wenn verdrahtet!
+static constexpr float BAT_R1          = 100000.0f;
+static constexpr float BAT_R2          =  47000.0f;
+static constexpr float BAT_DIVIDER_INV = (BAT_R1 + BAT_R2) / BAT_R2;
+static constexpr float BAT_WARN_V      = 6.6f;  // 3.3V/Zelle
+static constexpr float BAT_CUTOFF_V    = 6.0f;  // 3.0V/Zelle — latchend
 
 // ── EEPROM layout ─────────────────────────────────────────────────────────────
 static constexpr int EEPROM_SIZE       = 32;
@@ -156,6 +162,12 @@ static constexpr uint32_t PAIR_TIMEOUT_MS    = 5000;
 static uint32_t gLedPhaseMs = 0;
 static int8_t   gMappingSlot = 0;  // 0 = normal, 1-8 = show slot color
 
+// Battery state — gBatWired auf true setzen sobald Spannungsteiler verdrahtet
+static bool    gBatWired   = false;
+static float   gBatVoltage = 8.4f;
+static uint8_t gBatLevel   = 5;     // 0–5; 0=kritisch/Cutoff, 5=voll
+static bool    gBatCutoff  = false; // latchend — nur Power-Cycle löst
+
 // ── EEPROM helpers ────────────────────────────────────────────────────────────
 static void eepromLoad() {
     EEPROM.begin(EEPROM_SIZE);
@@ -194,14 +206,14 @@ static void eepromClear() {
 // ── Motor ─────────────────────────────────────────────────────────────────────
 static void motorSet(int8_t throttle) {
     if (throttle > 0) {
-        ledcWrite(CH_RPWM, map(throttle, 1, 100, 0, 255));
-        ledcWrite(CH_LPWM, 0);
+        ledcWrite(PIN_RPWM, map(throttle, 1, 100, 0, 255));
+        ledcWrite(PIN_LPWM, 0);
     } else if (throttle < 0) {
-        ledcWrite(CH_RPWM, 0);
-        ledcWrite(CH_LPWM, map(-throttle, 1, 100, 0, 255));
+        ledcWrite(PIN_RPWM, 0);
+        ledcWrite(PIN_LPWM, map(-throttle, 1, 100, 0, 255));
     } else {
-        ledcWrite(CH_RPWM, 0);
-        ledcWrite(CH_LPWM, 0);
+        ledcWrite(PIN_RPWM, 0);
+        ledcWrite(PIN_LPWM, 0);
     }
 }
 
@@ -248,10 +260,33 @@ static void readCharacter() {
     else                 { gCharName = "Toad";    gCharFolder = 7; }
 }
 
-// ── Battery (not yet wired) ───────────────────────────────────────────────────
-static uint8_t readBattery() {
-    return 0;  // ADC not wired — always report 0 (=leer)
+// ── Battery ───────────────────────────────────────────────────────────────────
+static void batUpdate() {
+    if (!gBatWired) return;
+    int sum = 0;
+    for (int i = 0; i < 4; i++) sum += analogRead(PIN_ADC_BAT);
+    float vAdc = (sum / 4) * 3.3f / 4095.0f;
+    gBatVoltage = vAdc * BAT_DIVIDER_INV;
+    if (gBatVoltage < BAT_CUTOFF_V) {
+        gBatLevel = 0;
+        if (!gBatCutoff) {
+            Serial.printf("[BAT] CUTOFF %.2fV — Motor gesperrt\n", gBatVoltage);
+            if (gDfOk && gCharFolder >= 1 && gCharFolder <= 8) {
+                const CharSounds& s = kSounds[gCharFolder - 1];
+                if (s.sadCount > 0) gDf.playFolder(gCharFolder, s.sad[esp_random() % s.sadCount]);
+            }
+            gBatCutoff = true;
+        }
+        return;
+    }
+    if      (gBatVoltage < BAT_WARN_V) gBatLevel = 1;
+    else if (gBatVoltage < 7.0f)       gBatLevel = 2;
+    else if (gBatVoltage < 7.4f)       gBatLevel = 3;
+    else if (gBatVoltage < 7.9f)       gBatLevel = 4;
+    else                               gBatLevel = 5;
 }
+
+static uint8_t readBattery() { return gBatLevel; }
 
 // ── IR LED ────────────────────────────────────────────────────────────────────
 static void irSetActive(bool active) {
@@ -269,10 +304,6 @@ static void irSetActive(bool active) {
 static constexpr int LED_CHAR_FIRST = 0;
 static constexpr int LED_CHAR_LAST  = 7;
 static constexpr int LED_STATUS     = 8;
-
-// Wird auf true gesetzt sobald Batterie-ADC verdrahtet ist.
-// Solange false: keine Akkuwarnung (ADC liefert immer 0).
-static bool gBatWired = false;
 
 static uint32_t wheel(uint8_t pos) {
     pos = 255 - pos;
@@ -393,7 +424,8 @@ static void applyChannelSwitch(uint8_t ch) {
 }
 
 // ── ESP-NOW receive callback ──────────────────────────────────────────────────
-static void onRecv(const uint8_t* senderMac, const uint8_t* data, int len) {
+static void onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+    const uint8_t* senderMac = info->src_addr;
     if (len < 1) return;
     uint8_t type = data[0];
 
@@ -513,20 +545,22 @@ void setup() {
     readCharacter();
     Serial.printf("[CHAR] %s (folder %d)\n", gCharName, gCharFolder);
 
+    // Servo — vor dem Motor attachen, damit die ESP32Servo-eigene Kanalverwaltung
+    // Kanal 0 bekommt, bevor die rohen ledcAttach()-Aufrufe unten ihn belegen.
+    if (gServo.attach(PIN_SERVO, 1000, 2000)) {
+        gServo.writeMicroseconds(SERVO_MID_US);
+        Serial.println("[SERVO] ok");
+    } else {
+        Serial.println("[SERVO] FEHLER");
+    }
+
     // Motor
     pinMode(PIN_RPWM, OUTPUT); digitalWrite(PIN_RPWM, LOW);
     pinMode(PIN_LPWM, OUTPUT); digitalWrite(PIN_LPWM, LOW);
-    ledcSetup(CH_RPWM, 10000, 8);
-    ledcAttachPin(PIN_RPWM, CH_RPWM);
-    ledcSetup(CH_LPWM, 10000, 8);
-    ledcAttachPin(PIN_LPWM, CH_LPWM);
+    ledcAttach(PIN_RPWM, 10000, 8);
+    ledcAttach(PIN_LPWM, 10000, 8);
     motorSet(0);
     Serial.println("[MOTOR] ok");
-
-    // Servo
-    gServo.attach(PIN_SERVO, 1000, 2000);
-    gServo.writeMicroseconds(SERVO_MID_US);
-    Serial.println("[SERVO] ok");
 
     // IR LED
     pinMode(PIN_IR, OUTPUT);
@@ -574,7 +608,7 @@ void loop() {
     uint32_t now = millis();
 
     // ── Aktuatoren (immer aus Main-Loop, nie aus Callback) ───────────────────
-    if (!gPaired || (now - gLastPacketMs > CONTROL_TIMEOUT_MS)) {
+    if (gBatCutoff || !gPaired || (now - gLastPacketMs > CONTROL_TIMEOUT_MS)) {
         motorSet(0);
         servoSet(0);
     } else {
@@ -603,7 +637,7 @@ void loop() {
         if (blueNow && !bluePrev) {
             const CharSounds& s = kSounds[gCharFolder - 1];
             if (s.joyCount > 0) {
-                uint8_t track = s.joy[random(s.joyCount)];
+                uint8_t track = s.joy[esp_random() % s.joyCount];
                 gDf.playFolder(gCharFolder, track);
             }
         }
@@ -625,6 +659,13 @@ void loop() {
         fb.rumble  = (millis() < gRumbleUntilMs) ? 1 : 0;
         espnowSend(gBaseMac, &fb, sizeof(fb));
         lastFb = now;
+    }
+
+    // ── Battery update (1Hz) ─────────────────────────────────────────────────
+    static uint32_t lastBat = 0;
+    if (now - lastBat >= 1000) {
+        batUpdate();
+        lastBat = now;
     }
 
     // ── LED update (50Hz) ─────────────────────────────────────────────────────
