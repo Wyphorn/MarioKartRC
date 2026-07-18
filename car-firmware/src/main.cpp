@@ -547,7 +547,10 @@ void setup() {
 
     // Servo — vor dem Motor attachen, damit die ESP32Servo-eigene Kanalverwaltung
     // Kanal 0 bekommt, bevor die rohen ledcAttach()-Aufrufe unten ihn belegen.
-    if (gServo.attach(PIN_SERVO, 1000, 2000)) {
+    // Hinweis: Servo::attach() gibt die Kanalnummer zurück (0 = Erfolg auf Kanal 0,
+    // aber falsy in C++!) — darum hier über attached() prüfen, nicht den Rückgabewert.
+    gServo.attach(PIN_SERVO, 1000, 2000);
+    if (gServo.attached()) {
         gServo.writeMicroseconds(SERVO_MID_US);
         Serial.println("[SERVO] ok");
     } else {
