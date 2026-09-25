@@ -18,6 +18,10 @@ enum MK_MsgType : uint8_t {
     MSG_MAPPING        = 0x13,   // Basis → FB/Auto (Unicast) — mapping process: show slot number/color
     MSG_IR_CONFIG      = 0x14,   // Basis → Auto (Unicast) — activates IR transmission with vehicle ID
                                  // Direct Mode: never sent → IR stays off
+
+    MSG_HUNTER_TAG     = 0x15,   // Auto (Jäger) → Basis (Unicast) — Jäger meldet vermutliches Opfer
+    MSG_HUNTER_STATE   = 0x16,   // Basis → Broadcast — offizieller neuer Jäger (autoritativ)
+    MSG_HUNTER_SCORES  = 0x17,   // Basis → Broadcast (alle FBs) — Spielerliste + Jäger-Zeiten für Display
 };
 
 // ── Device types ─────────────────────────────────────────────────────────────
@@ -45,8 +49,15 @@ enum MK_DeviceType : uint8_t {
 //
 // Channel lifecycle (Direct Mode):
 //   FB picks a random channel from MK_DIRECT_CHANNELS after pairing and sends
-//   MSG_CHANNEL_SWITCH to the car. Both persist the channel. On reconnect, FB
-//   boots to the persisted channel and waits for the car's beacon there.
+//   MSG_CHANNEL_SWITCH to the car. Both persist the channel; the FB also the
+//   car MAC, the car the FB MAC. Reconnect is FB-driven, no beacon/assign:
+//   the FB goes to the persisted channel with its real MAC and simply sends
+//   MSG_CONTROL to the persisted car MAC; the car's MSG_FEEDBACK confirms the
+//   link. The car keeps its pairing on link loss (restored from EEPROM after
+//   its own reboot) and only falls back to MK_ESPNOW_CHANNEL after 30s of
+//   silence (5s right after boot). FB gives up after 15s after boot (car boot takes ~10s), 30s after
+//   a runtime loss. Channel 1 is avoided on purpose: there the first FB wins,
+//   so every fallback may change the FB↔car assignment.
 //   No race-end reset needed — each new pairing picks a fresh random channel.
 
 #define MK_ESPNOW_CHANNEL  1        // Fixed registration/setup channel — NEVER used as race channel.
@@ -130,7 +141,10 @@ struct MK_ControlInput {
 
 // ── FB → Auto / FB → Basis → Auto ───────────────────────────────────────────
 // Sent only when a config value changes (not every loop).
-// Car stores values in its own EEPROM and applies them immediately.
+// Car applies values immediately; stores them in its own EEPROM only when
+// save=1. save=0 is a live preview (trim menu: wheels move while adjusting).
+// The trim belongs to the car — the FB does not persist it, it learns the
+// current value from MK_GameFeedback.trim.
 // Routing is transparent: car behaves identically whether packet
 // arrives directly from FB (Direct Mode) or forwarded by base (Game Mode).
 // Base MUST forward MK_ConfigPacket unicast to the paired car — it is not
@@ -139,6 +153,7 @@ struct MK_ControlInput {
 struct MK_ConfigPacket {
     uint8_t type = MSG_CONFIG;
     int8_t  trim;         // Servo trim -10..10, stored in car EEPROM
+    uint8_t save = 1;     // 1 = persist in car EEPROM, 0 = apply only (preview)
 };
 
 // ── Auto → FB / Basis → FB ───────────────────────────────────────────────────
@@ -154,6 +169,7 @@ struct MK_GameFeedback {
     uint8_t rumble;       // 0=off, 1=on — Basis steuert Dauer über Paketanzahl
     // uint8_t hitByItem; // TODO: item that hit this player (banana, shell, …) — triggers rumble + display hint
     uint8_t carBat;       // 0=leer … 5=voll — vorquantisiert vom Fahrzeug (kein Display-Jitter durch LiPo-Rauschen)
+    int8_t  trim;         // aktueller Servo-Trim des Autos (-10..10). Game Mode: Basis reicht den Wert des Autos durch
 };
 
 // ── Device registration ───────────────────────────────────────────────────────
@@ -195,10 +211,80 @@ struct MK_Beacon {
     uint8_t  charId;      // 1–8 (car only, matches DFPlayer folder); 0 if not applicable
 };
 
+// ── Spieltyp ──────────────────────────────────────────────────────────────────
+// Basis legt den Spieltyp VOR dem Pairing fest (erster Bildschirm der Basis-UI)
+// und sendet ihn direkt in MK_Assign mit. Die FB wählt darüber in Game Mode
+// zwischen STATE_RACE_DISPLAY und STATE_HUNTER_DISPLAY (o.ä.).
+// Direct Mode: irrelevant/ignoriert, da keine Basis-Spiellogik vorhanden.
+
+enum MK_GameType : uint8_t {
+    GAME_RACE   = 0x01,   // klassisches Rennen (Runde/Position/Item)
+    GAME_HUNTER = 0x02,   // Jagd
+};
+
 struct MK_Assign {
     uint8_t  type       = MSG_ASSIGN;
     uint8_t  slot;        // Assigned slot 1–8
     uint8_t  baseMac[6]; // Target MAC for all future TX — base station (Game) or FB (Direct)
+    uint8_t  gameType;    // MK_GameType — siehe oben
+};
+
+// ── Spielmodus "Jagd" (Hunter) ────────────────────────────────────────────────
+// Ein Jäger-Auto zeigt WS2812B-Regenbogen + Star-Sound. Rammt der Jäger ein
+// anderes Auto, wird das gerammte Auto der neue Jäger.
+//
+// Erkennung "OB" gerammt wurde: bestehende IMU-Kollisionserkennung (main.cpp,
+// checkCollision(), 10Hz) — unverändert, kein neuer Sensor nötig.
+//
+// Erkennung "WEN" der Jäger gerammt hat (kein Tor/Bodenplatte in diesem Modus,
+// daher keine Positionsdaten verfügbar):
+//   1. Jedes NICHT-Jäger-Auto sendet bei eigener IMU-Kollision 1s lang einen
+//      BLE-Advertising-Beacon (eigene Slot-ID im Payload). BLE nutzt feste
+//      Kanäle 37/38/39, unabhängig vom aktuellen ESP-NOW/WiFi-Kanal des Autos
+//      (S3-1/2/3 auf CH1/6/11) — Coexistence mit WiFi ist Standard auf dem C6.
+//   2. Der Jäger scannt nach eigener IMU-Kollision für 1s nach diesen Beacons
+//      und nimmt den Slot mit der höchsten empfangenen RSSI als Opfer an
+//      (relativer Vergleich zwischen den empfangenen Beacons, keine absolute
+//      Distanzschätzung — deutlich robuster gegen Ground-Bounce/Multipath).
+//   3. Jäger meldet das Ergebnis per MK_HunterTag an die Basis.
+//   4. Basis bleibt Single Source of Truth: bestätigt den Wechsel per
+//      MK_HunterState-Broadcast an alle Autos. Der alte Jäger schaltet sein
+//      Signal ERST bei Empfang von MK_HunterState ab (nicht schon beim Senden
+//      von MK_HunterTag) — ESP-NOW garantiert keine Zustellung, sonst könnte
+//      kurzzeitig niemand Jäger sein, falls MK_HunterTag verloren geht.
+//
+// Mehrdeutigkeit bei parallelen Unfällen (z.B. zwei Autos crashen gleichzeitig
+// an unterschiedlichen Stellen der Strecke): wird durch das BLE-Beacon-Fenster
+// weitgehend gefiltert, da ein Auto weit entfernt vom Jäger kein/kaum
+// empfangbares Signal liefert. Der Jäger wird NIE zurückgestuft, nur weil
+// mehrere Kandidaten kurzzeitig Beacons senden — er hat erfolgreich gerammt,
+// das zählt.
+//
+// Wertung: Basis führt pro Spieler eine kumulative Jäger-Zeit (Sekunden).
+// Sieger am Spielende = wer insgesamt am KÜRZESTEN Jäger war.
+//
+// FB-Display in diesem Modus: keine Runde/Position, stattdessen Spielerliste
+// mit Jäger-Kennzeichnung + invertierter eigener Zeile. Für "Live-Feeling"
+// zählt die FB die Sekunden des laut letztem Update aktiven Jägers lokal
+// zwischen zwei MK_HunterScores-Updates einfach weiter hoch (reine
+// Display-Interpolation, auch wenn serverseitig der Jäger evtl. schon
+// gewechselt hat) — Basis-Daten selbst bleiben davon unberührt und
+// korrigieren die Anzeige beim nächsten Update automatisch.
+
+struct MK_HunterTag {
+    uint8_t type          = MSG_HUNTER_TAG;
+    uint8_t newHunterSlot; // 1–8: per BLE-RSSI ermitteltes Opfer
+};
+
+struct MK_HunterState {
+    uint8_t type       = MSG_HUNTER_STATE;
+    uint8_t hunterSlot; // 1–8: aktueller, offizieller Jäger
+};
+
+struct MK_HunterScores {
+    uint8_t  type = MSG_HUNTER_SCORES;
+    uint8_t  hunterSlot;        // 1–8: aktueller offizieller Jäger
+    uint16_t secondsPerSlot[8]; // kumulierte Jäger-Sekunden, Index = Slot-1; Sieger = niedrigster Wert
 };
 
 // ── Base station architecture (multi-S3) ─────────────────────────────────────

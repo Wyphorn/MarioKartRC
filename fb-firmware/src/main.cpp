@@ -2,41 +2,101 @@
 #include <Wire.h>
 #include <EEPROM.h>
 #include <Adafruit_ADS1X15.h>
-#include <Adafruit_SSD1306.h>
+#include <Adafruit_ST7789.h>
+#include <SPI.h>
 #include <Adafruit_NeoPixel.h>
-#include <ESP8266WiFi.h>
-extern "C" {
-    #include <espnow.h>
-    #include <user_interface.h>
-}
+#include <WiFi.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
+#include <esp_sleep.h>
+#include <driver/gpio.h>
 #include "mk_protocol.h"
+#include "mk_clock_guard.h"
 
-// --- Pins ---
-#define PIN_RUMBLE  D8
-// Zuordnung Farbe → Pin: TBD beim PCB-Layout (Leiterbahnen Button-Board)
-#define PIN_BTN_YELLOW  D5
-#define PIN_BTN_GREEN   D6
-#define PIN_BTN_BLUE    D7
-#define PIN_BTN_RED     D3
-#define PIN_LED     D4
-#define PIN_MODE    D0
+// --- Pins (ESP32-C6-SuperMini, Repin 2026-09-06) ---
+// Tabu: GPIO12/13 (USB D-/D+), GPIO8/9 (RGB-LED / BOOT-Strap),
+//       GPIO16/17 (UART0 — TXD0 wird vom Boot-ROM aktiv getrieben).
+// ADC1 liegt nur auf GPIO0–6, der Batterie-Monitor muss dorthin.
+#define PIN_BAT_ADC      0   // ADC1_0, externer Teiler 100k/100k
+#define PIN_MODE         1   // fest an 3.3V/GND — darf kein UART0-TX sein
+#define PIN_BTN_RED      2
+#define PIN_BTN_BLUE     3
+#define PIN_BTN_GREEN    4
+#define PIN_TFT_MOSI     5   // FSPI MOSI — IO_MUX, volle Taktrate
+#define PIN_LED          6   // WS2812B DATA
+#define PIN_TFT_SCK      7   // FSPI SCK — IO_MUX, volle Taktrate
+#define PIN_TFT_BL      14   // Backlight, PWM-gedimmt
+#define PIN_TFT_CS      15
+// GPIO16 = UART0 TXD0 — im Layout nicht erreichbar, bleibt frei.
+#define PIN_RUMBLE      17   // LEDC. GPIO17 = UART0 RXD0 — der ROM liest den Pin
+                             // nur, treibt ihn nie. Kein Motorzappeln beim Boot.
+#define PIN_TFT_DC      18
+#define PIN_I2C_SDA     19
+#define PIN_I2C_SCL     20
+// GPIO21-23 liegen auf den inneren Pads des SuperMini, nicht an den
+// Hauptleisten — dort ist je ein Draht noetig.
+#define PIN_BTN_STICK_R 21   // reserviert, bewusst ohne Funktion
+#define PIN_BTN_STICK_L 22   // reserviert, bewusst ohne Funktion
+#define PIN_BTN_YELLOW  23   // inneres Pad — einziger Draht. Bewusst ein Taster
+                             // und nicht MOSI: bei einem Tastersignal ist eine
+                             // fliegende Verbindung unkritisch.
 
 // --- ADS1115 Kanäle ---
+// ADS1115-Kanal je Achse. A2/A3 sind gegenueber der naheliegenden Reihenfolge
+// getauscht, damit sich die Leitungen von J3 zum ADS-Modul im Layout nicht
+// kreuzen. Alles Weitere folgt diesen vier Zeilen — auch CAL_STEP_CH.
 #define JS_LEFT_X   0
 #define JS_LEFT_Y   1
-#define JS_RIGHT_X  2
-#define JS_RIGHT_Y  3
+#define JS_RIGHT_Y  2
+#define JS_RIGHT_X  3
 
-// --- Display ---
-#define OLED_WIDTH  128
-#define OLED_HEIGHT 64
+// --- Display: 1.9" IPS 170x320 ST7789, Querformat ---
+// init(170,320) laesst die Library colstart=35 / rowstart=0 rechnen — genau der
+// Versatz, mit dem das 170er-Panel im 240x320-Controller sitzt.
+// setRotation(1) dreht auf Querformat. Steht das Bild auf dem Kopf: 3 statt 1.
+#define TFT_PANEL_W  170
+#define TFT_PANEL_H  320
+#define TFT_ROTATION   1
+#define TFT_W        320
+#define TFT_H        170
+
+// GFX-Standardfont: 6x8 bei Groesse 1, also 12x16 bei Groesse 2.
+// Groesse 2 ist die Basis — 26 Zeichen pro Zeile, 10 Zeilen.
+#define CH_W          12
+#define CH_H          16
+#define TITLE_Y        6
+#define RULE_Y        28
+#define BODY_Y        40
+#define LINE_H        22
+
+// Backlight per LEDC gedimmt statt hart auf HIGH: spart Strom (das 1.9"-IPS
+// zieht bei voller Helligkeit 30–60mA) und spaeter 18650-Laufzeit.
+#define TFT_BL_FREQ   5000
+#define TFT_BL_RES       8
+#define TFT_BL_LEVEL   150   // ~60%, drinnen gut ablesbar
+#define TFT_BL_DIM      10   // ~4%, nach TFT_DIM_AFTER_MS ohne Eingabe
+#define TFT_DIM_AFTER_MS 60000
+
+// Farben (RGB565)
+#define COL_BG       ST77XX_BLACK
+#define COL_FG       ST77XX_WHITE
+#define COL_DIM      0x8410
+#define COL_ACCENT   0xFD20
+#define COL_OK       0x07E0
+#define COL_WARN     0xFFE0
+#define COL_CRIT     0xF800
 
 // --- Rumble ---
+// Auf dem C6 ist PWM Hardware (LEDC). Das Brummen beim Verbindungsverlust auf
+// dem ESP8266 kam von dessen Software-PWM, die unter WLAN-Interruptlast glitchte
+// — diese Fehlerklasse entfaellt hier.
 #define RUMBLE_PWM          255
+#define RUMBLE_PWM_FREQ   20000
+#define RUMBLE_PWM_RES        8
 
 // --- Timings ---
 #define LOOP_PERIOD_MS    20     // 50 Hz Zielfrequenz
-#define DISPLAY_PERIOD_MS 500   // Mindestabstand zwischen Display-Updates
+#define DISPLAY_PERIOD_MS 100   // Mindestabstand zwischen Display-Updates (Normalscreen, Teil-Updates)
 #define CAL_HOLD_MS   3000
 #define CAL_PULSE_MS  3000
 #define CAL_SHOW_MS   3000
@@ -62,10 +122,11 @@ extern "C" {
 #define EEPROM_ADDR_CENTER  2   // 4x int16 = 8B
 #define EEPROM_ADDR_MIN    10   // 4x int16 = 8B
 #define EEPROM_ADDR_MAX    18   // 4x int16 = 8B
-#define EEPROM_ADDR_TRIM    26   // int8
+#define EEPROM_ADDR_TRIM    26   // int8 — unbenutzt, der Trim gehoert dem Auto
 #define EEPROM_ADDR_LANG    27   // uint8
 #define EEPROM_ADDR_CHANNEL 28   // uint8, 0 = kein gespeicherter Kanal
-#define EEPROM_SIZE         32
+#define EEPROM_ADDR_CARMAC  29   // 6B, MAC des zuletzt gepairten Autos (Direct Mode)
+#define EEPROM_SIZE         40
 
 // --- Trim & Speed ---
 #define TRIM_STEPS  21
@@ -74,10 +135,24 @@ extern "C" {
 #define SPEED_STEPS  10
 
 // --- Akku ---
-// Teiler: 100kΩ extern + 220kΩ/100kΩ intern → Vbat = analogRead/1023 * 4.2
+// Solange der Spannungsteiler (100k/100k an PIN_BAT_ADC) nicht verdrahtet ist,
+// floatet der Pin und liefert Mist (~1.2V → 0%). Das wuerde die LED rot blinken
+// lassen und den Rumble abschalten. Analog zu gBatWired in der Auto-Firmware.
+// Auf true setzen, sobald der Teiler dran ist. Verdrahtet seit 2026-09-25.
+#define BAT_WIRED  true
+// Der C6 hat keinen internen Teiler wie der ESP8266-A0. Extern 100k/100k:
+// 4.2V → 2.1V, sicher unter der 3.3V-Referenz. analogReadMilliVolts() nutzt die
+// werkskalibrierte ADC-Kurve, deshalb kein roher analogRead().
+#define BAT_DIV_RATIO   2.0f
 #define BAT_LOW_PCT   33
 #define BAT_CRIT_PCT  16
 #define BAT_CHECK_MS  10000
+// Tiefentladeschutz: ungeschuetzte 18650. Liegt die Zelle BAT_OFF_SAMPLES
+// Messungen in Folge (= 30 s) unter BAT_OFF_V, geht die FB in Deep Sleep ohne
+// Weckquelle — nur Aus-/Einschalten am Schalter holt sie zurueck. Mehrere
+// Messungen, damit ein kurzer Einbruch durch den Rumble nicht ausloest.
+#define BAT_OFF_V       3.3f
+#define BAT_OFF_SAMPLES 3
 
 // --- Menü ---
 #define MENU_ITEM_COUNT  9
@@ -93,7 +168,10 @@ extern "C" {
 
 // --- Min/Max Kalibrierungsschritte ---
 // 8 Schritte: LX-min, LX-max, LY-min, LY-max, RX-min, RX-max, RY-min, RY-max
-const uint8_t CAL_STEP_CH[8]    = {0, 0, 1, 1, 2, 2, 3, 3};
+// Bewusst ueber die JS_*-Defines statt roher Kanalnummern: so folgt die
+// Kalibrierung automatisch, wenn die ADS-Kanaele im Layout getauscht werden.
+const uint8_t CAL_STEP_CH[8]    = {JS_LEFT_X,  JS_LEFT_X,  JS_LEFT_Y,  JS_LEFT_Y,
+                                   JS_RIGHT_X, JS_RIGHT_X, JS_RIGHT_Y, JS_RIGHT_Y};
 const bool    CAL_STEP_ISMAX[8] = {false, true, false, true, false, true, false, true};
 
 struct CalStep { const char* line1; const char* line2; };
@@ -122,6 +200,9 @@ struct Strings {
     const char* connectingGame;     // "Verbinde mit Basis"
     const char* rejoiningLine1;     // Zeile 1: "Verbinde mit"
     const char* rejoiningLine2;     // Zeile 2: "letztem Spiel"
+    const char* batEmpty;           // Statuszeile ab 0% (3.4V)
+    const char* batOffLine1;        // Abschalt-Screen Zeile 1
+    const char* batOffLine2;        // Abschalt-Screen Zeile 2
 };
 
 const Strings STRINGS[LANG_COUNT] = {
@@ -145,7 +226,7 @@ const Strings STRINGS[LANG_COUNT] = {
             { "Rechten Stick", "nach oben druecken"   },
             { "Rechten Stick", "nach unten druecken"  },
         },
-        "Gelb = bestaetigen",
+        "Gruen = bestaetigen",
         "Schritt",
         "Servo-Trim",
         "Max. Speed",
@@ -156,7 +237,9 @@ const Strings STRINGS[LANG_COUNT] = {
         "An", "Aus",
         "An", "Aus",
         "Warte auf Auto", "Verbinde mit Basis",
-        "Verbinde mit", "letztem Spiel"
+        "Verbinde mit", "letztem Spiel",
+        "Akku leer!",
+        "Akku leer", "Bitte ausschalten"
     },
     // LANG_EN
     {
@@ -178,7 +261,7 @@ const Strings STRINGS[LANG_COUNT] = {
             { "Right stick", "push up"    },
             { "Right stick", "push down"  },
         },
-        "Yellow = confirm",
+        "Green = confirm",
         "Step",
         "Servo Trim",
         "Max. Speed",
@@ -189,7 +272,9 @@ const Strings STRINGS[LANG_COUNT] = {
         "On", "Off",
         "On", "Off",
         "Waiting for car", "Connecting to base",
-        "Reconnecting", "to last game"
+        "Reconnecting", "to last game",
+        "Battery empty!",
+        "Battery empty", "Please switch off"
     }
 };
 
@@ -212,7 +297,7 @@ enum FBState {
 
 // --- Globale Variablen ---
 Adafruit_ADS1115  ads;
-Adafruit_SSD1306  display(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
+Adafruit_ST7789   display(PIN_TFT_CS, PIN_TFT_DC, -1);  // RST fest auf 3.3V
 Adafruit_NeoPixel led(1, PIN_LED, NEO_GRB + NEO_KHZ800);
 
 bool    adsOK   = false;
@@ -224,7 +309,6 @@ bool    rumbleEnabled = true;
 
 FBState  state        = STATE_READY;
 uint8_t  langIndex    = LANG_DE;
-int8_t   servoTrim    = 0;
 uint8_t  maxSpeed     = SPEED_STEPS;   // temporär, nicht im EEPROM
 
 int16_t  jsCenter[4]  = {JS_DEFAULT_CENTER, JS_DEFAULT_CENTER, JS_DEFAULT_CENTER, JS_DEFAULT_CENTER};
@@ -243,6 +327,7 @@ int8_t  menuScroll    = 0;
 uint8_t calStep       = 0;
 
 int8_t  trimTemp      = 0;
+int8_t  trimOrig      = 0;   // Trim des Autos beim Betreten des Menues, fuer Rot
 uint8_t speedTemp     = SPEED_STEPS;
 uint8_t langTemp      = LANG_DE;
 
@@ -255,6 +340,14 @@ int16_t jsMaxTemp[4];
 #define BEACON_INTERVAL_MS        500
 #define FEEDBACK_TIMEOUT_MS      2000
 #define SAVED_CHANNEL_TIMEOUT_MS 5000
+// Direct Mode: FB meldet sich nach Neustart/Funkstille selbst beim bekannten Auto
+// (gespeicherter Kanal + Auto-MAC), ohne Beacon. Nach dem Boot kurz, im Betrieb
+// so lange wie das Auto auf dem Kanal wartet (LINK_LOST_MS in car-firmware).
+// 15 s statt 5 s: das Auto braucht zum Booten ~10 s (Servo-Test, DFPlayer-
+// Diagnose). Mit 5 s gab die FB beim gemeinsamen Einschalten zu frueh auf und
+// beide landeten auf Kanal 1.
+#define RECONNECT_BOOT_MS       15000
+#define RECONNECT_LOST_MS       30000
 
 uint8_t  realMac[6];
 uint8_t  peerMac[6];
@@ -267,6 +360,9 @@ uint8_t pairingCarMac[6];
 uint8_t pairingBaseMac[6];
 
 bool             trySavedChannel    = false;
+bool             reconnecting       = false;   // Direct: gepairt, aber noch kein Feedback
+unsigned long    reconnectStart     = 0;
+unsigned long    reconnectLimit     = 0;
 unsigned long    savedChannelStart  = 0;
 volatile uint8_t pendingChannelSave = 0;
 
@@ -277,6 +373,7 @@ struct FeedbackState {
     uint8_t item     = 0;
     uint8_t rumble   = 0;
     uint8_t carBat   = 0;
+    int8_t  trim     = 0;   // Servo-Trim des Autos, nur zur Anzeige im Trim-Menue
 };
 volatile FeedbackState feedbackRaw;
 volatile bool          feedbackNew    = false;
@@ -288,6 +385,10 @@ volatile int8_t mappingSlot = -1;  // -1 = inaktiv, 1–8 = Slot anzeigen
 
 const Strings& S() { return STRINGS[langIndex]; }
 
+// ESP-NOW-Helfer sind weiter unten definiert, displayDebug() braucht sie schon hier.
+static uint8_t getChannel();
+static void    getMac(uint8_t* out);
+
 // ──────────────────────────────────────────────
 // LED
 // ──────────────────────────────────────────────
@@ -298,16 +399,17 @@ void setLed(uint8_t r, uint8_t g, uint8_t b) {
 void ledGreen()  { setLed(0, 60, 0); }
 void ledYellow() { setLed(60, 60, 0); }
 void ledPulseYellow() {
-    uint32_t t = (millis() - stateStart) % 600;
+    uint32_t t = (nowMs() - stateStart) % 600;
     uint8_t  v = (t < 300) ? (t * 60 / 300) : ((600 - t) * 60 / 300);
     setLed(v, v, 0);
 }
-void ledRedBlink()    { uint8_t v = ((millis() / 500) % 2) ? 60 : 0; setLed(v, 0, 0); }
+// 300ms-Takt wie der Status-Blink im Auto (car-firmware, LED_STATUS)
+void ledRedBlink()    { uint8_t v = ((nowMs() / 300) % 2) ? 60 : 0; setLed(v, 0, 0); }
 void ledOrange()      { setLed(60, 20, 0); }
 void ledPink()        { setLed(60, 0, 40); }
 void ledBlue()        { setLed(0, 0, 60); }
-void ledPulseOrange() { uint8_t v = ((millis() / 300) % 2) ? 60 : 0; setLed(v, v/3, 0); }
-void ledPulseBlue()   { uint8_t v = ((millis() / 300) % 2) ? 60 : 0; setLed(0, 0, v); }
+void ledPulseOrange() { uint8_t v = ((nowMs() / 300) % 2) ? 60 : 0; setLed(v, v/3, 0); }
+void ledPulseBlue()   { uint8_t v = ((nowMs() / 300) % 2) ? 60 : 0; setLed(0, 0, v); }
 void ledReady() {
     if      (batPct <= BAT_CRIT_PCT) ledRedBlink();
     else if (batPct <= BAT_LOW_PCT)  ledOrange();
@@ -322,7 +424,6 @@ void saveSettings() {
     EEPROM.put(EEPROM_ADDR_CENTER, jsCenter);
     EEPROM.put(EEPROM_ADDR_MIN,    jsMin);
     EEPROM.put(EEPROM_ADDR_MAX,    jsMax);
-    EEPROM.put(EEPROM_ADDR_TRIM,   servoTrim);
     EEPROM.put(EEPROM_ADDR_LANG,   langIndex);
     EEPROM.commit();
 }
@@ -334,13 +435,12 @@ bool loadSettings() {
     EEPROM.get(EEPROM_ADDR_CENTER, jsCenter);
     EEPROM.get(EEPROM_ADDR_MIN,    jsMin);
     EEPROM.get(EEPROM_ADDR_MAX,    jsMax);
-    EEPROM.get(EEPROM_ADDR_TRIM,   servoTrim);
     EEPROM.get(EEPROM_ADDR_LANG,   langIndex);
-    Serial.printf("[EEPROM] ctr:%d %d %d %d  min:%d %d %d %d  max:%d %d %d %d  trim:%d  lang:%d\n",
+    Serial.printf("[EEPROM] ctr:%d %d %d %d  min:%d %d %d %d  max:%d %d %d %d  lang:%d\n",
         jsCenter[0], jsCenter[1], jsCenter[2], jsCenter[3],
         jsMin[0], jsMin[1], jsMin[2], jsMin[3],
         jsMax[0], jsMax[1], jsMax[2], jsMax[3],
-        servoTrim, langIndex);
+        langIndex);
     return true;
 }
 
@@ -362,12 +462,60 @@ void calibrateOffset() {
         jsCenter[0], jsCenter[1], jsCenter[2], jsCenter[3]);
 }
 
+// Tiefentladeschutz: alles Abschaltbare aus, Meldung, dann Deep Sleep ohne
+// Weckquelle. Uebrig bleiben ein paar mA (Joystick-Potis, WS2812B-Ruhestrom,
+// LDO) — das genuegt, entscheidend ist, dass nicht mehr gefahren wird.
+void dispClear();
+void dispCentered(const char* text, int y, uint8_t size, uint16_t col);
+
+void fbShutdown() {
+    Serial.printf("[BAT] %.2fV < %.2fV — Abschaltung (Deep Sleep)\n", batVolt, BAT_OFF_V);
+    ledcWrite(PIN_RUMBLE, 0);
+    setLed(0, 0, 0);
+    if (dispOK) {
+        dispClear();
+        dispCentered(S().batOffLine1, 58, 2, COL_CRIT);
+        dispCentered(S().batOffLine2, 90, 2, COL_FG);
+    }
+    delay(5000);
+    if (dispOK) {
+        display.enableDisplay(false);
+        display.enableSleep(true);
+    }
+    // Ausgaenge im Deep Sleep auf LOW festhalten — sonst floaten sie und die
+    // Hintergrundbeleuchtung oder der Rumble-Transistor koennten anlaufen.
+    ledcDetach(PIN_TFT_BL);
+    ledcDetach(PIN_RUMBLE);
+    const uint8_t lowPins[] = { PIN_TFT_BL, PIN_RUMBLE, PIN_LED };
+    for (uint8_t pin : lowPins) {
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, LOW);
+        gpio_hold_en((gpio_num_t)pin);
+    }
+    Serial.flush();
+    esp_deep_sleep_start();   // keine Weckquelle konfiguriert
+}
+
 void updateBattery() {
+    if (!BAT_WIRED) {
+        // Teiler nicht verdrahtet — volle Ladung vortaeuschen, damit LED-Zustand
+        // und Rumble nicht faelschlich in den Kritisch-Fall laufen.
+        batVolt = 0.0f;
+        batPct  = 100;
+        return;
+    }
     int32_t sum = 0;
-    for (int i = 0; i < 4; i++) sum += analogRead(A0);
-    batVolt = (sum / 4.0f) / 1023.0f * 4.2f;
-    batPct = (uint8_t)constrain((int)((batVolt - 3.0f) / 1.2f * 100.0f), 0, 100);
+    for (int i = 0; i < 4; i++) sum += analogReadMilliVolts(PIN_BAT_ADC);
+    batVolt = (sum / 4.0f) / 1000.0f * BAT_DIV_RATIO;
+    // 0% = 3.4V, nicht 3.0V: darunter faellt der LDO aus der Regelung, die
+    // 3.3V-Schiene sackt ab und die Joystick-Werte wandern (siehe CLAUDE.md,
+    // "Akku-Abschaltschwelle 3.4V").
+    batPct = (uint8_t)constrain((int)((batVolt - 3.4f) / 0.8f * 100.0f), 0, 100);
     Serial.printf("[BAT] %.2fV %d%%\n", batVolt, batPct);
+
+    static uint8_t lowSamples = 0;
+    lowSamples = (batVolt < BAT_OFF_V) ? lowSamples + 1 : 0;
+    if (lowSamples >= BAT_OFF_SAMPLES) fbShutdown();
 }
 
 void resetSettings() {
@@ -376,9 +524,10 @@ void resetSettings() {
         jsMax[i]    = JS_DEFAULT_MAX;
         jsCenter[i] = JS_DEFAULT_CENTER;
     }
-    servoTrim = 0;
     uint8_t zero = 0;
+    uint8_t noMac[6] = {};
     EEPROM.put(EEPROM_ADDR_CHANNEL, zero);
+    EEPROM.put(EEPROM_ADDR_CARMAC, noMac);
     saveSettings();
     Serial.println("[RESET] Standardwerte wiederhergestellt – Offset-Kalibrierung noetig");
 }
@@ -409,36 +558,58 @@ int16_t mapJS(int16_t raw, int ch) {
 
 // ──────────────────────────────────────────────
 // Display-Hilfsfunktionen
+// Der ST7789 zeichnet direkt ins Panel — kein Framebuffer, also kein
+// clearDisplay()/display()-Paar mehr. dispClear() ersetzt beides.
 // ──────────────────────────────────────────────
+// false, sobald ein anderer Screen gezeichnet wurde — displayNormal() zeichnet
+// sonst nur bei Aenderungen neu und liesse z.B. nach dem Reconnect den
+// Verbinde-Screen stehen, weil paired dabei durchgehend true bleibt.
+bool normalOnScreen = false;
+
+void dispClear() {
+    display.fillScreen(COL_BG);
+    normalOnScreen = false;
+}
+
 void dispTitle(const char* title) {
     if (!dispOK) return;
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.println(title);
-    display.drawFastHLine(0, 9, 128, SSD1306_WHITE);
+    display.setTextSize(2);
+    display.setTextColor(COL_ACCENT);
+    display.setCursor(6, TITLE_Y);
+    display.print(title);
+    display.drawFastHLine(0, RULE_Y, TFT_W, COL_DIM);
+    display.setTextColor(COL_FG);
 }
 
-void dispHighlight(int y, const char* text, int h = 10) {
-    display.fillRect(0, y, 128, h, SSD1306_WHITE);
-    display.setTextColor(SSD1306_BLACK);
-    display.setCursor(4, y + (h >= 10 ? 1 : 0));
+void dispHighlight(int y, const char* text, int h = LINE_H) {
+    display.fillRect(0, y, TFT_W, h, COL_ACCENT);
+    display.setTextSize(2);
+    display.setTextColor(COL_BG);
+    display.setCursor(6, y + (h - CH_H) / 2);
     display.print(text);
-    display.setTextColor(SSD1306_WHITE);
+    display.setTextColor(COL_FG);
+}
+
+// Text horizontal zentriert bei Textgroesse size
+void dispCentered(const char* text, int y, uint8_t size, uint16_t col) {
+    display.setTextSize(size);
+    display.setTextColor(col);
+    int w = (int)strlen(text) * 6 * size;
+    display.setCursor((TFT_W - w) / 2, y);
+    display.print(text);
 }
 
 // ──────────────────────────────────────────────
-// Display: Akku-Icon (15x6px)
-// Balken je 1px breit, 4px hoch, 1px Lücke; Nub 2px rechts daneben
-// FB-Icon: pct → bars-Konversion, feste Position (113,1).
-// Auto-Icon: carBat 0–5 direkt als bars, Position (95,1).
+// Display: Akku-Icon (28x14px)
+// Balken je 3px breit, 10px hoch, 1px Luecke; Nub 3px rechts daneben
+// FB-Icon rechts oben, Auto-Icon links daneben.
 // ──────────────────────────────────────────────
-void drawBatteryIconBars(uint8_t bars, uint8_t x, uint8_t y) {
-    display.drawRect(x, y, 13, 6, SSD1306_WHITE);
-    display.fillRect(x + 13, y + 2, 2, 2, SSD1306_WHITE);
+void drawBatteryIconBars(uint8_t bars, uint16_t x, uint16_t y, uint16_t col) {
+    display.drawRect(x, y, 26, 14, col);
+    display.fillRect(x + 26, y + 4, 3, 6, col);
     for (uint8_t i = 0; i < 6; i++) {
         if (i < bars)
-            display.fillRect(x + 1 + i * 2, y + 1, 1, 4, SSD1306_WHITE);
+            display.fillRect(x + 2 + i * 4, y + 2, 3, 10, col);
     }
 }
 
@@ -448,7 +619,9 @@ void drawBatteryIcon(uint8_t pct) {
                    (pct > 50) ? 4 :
                    (pct > 33) ? 3 :
                    (pct > 16) ? 2 : 1;
-    drawBatteryIconBars(bars, 113, 1);
+    uint16_t col = (pct <= BAT_CRIT_PCT) ? COL_CRIT
+                 : (pct <= BAT_LOW_PCT)  ? COL_WARN : COL_OK;
+    drawBatteryIconBars(bars, TFT_W - 34, 6, col);
 }
 
 // ──────────────────────────────────────────────
@@ -458,97 +631,135 @@ void displayNormal(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
                    bool bYellow, bool bGreen, bool bBlue, bool bRed) {
     if (!dispOK) return;
 
+    // Kein Framebuffer: fillScreen() ist als Schwarzblitzen sichtbar. Deshalb
+    // nur beim Betreten des Screens einmal loeschen, danach jedes Feld einzeln
+    // aktualisieren — Text deckend (Vorder- UND Hintergrundfarbe), damit die
+    // alten Zeichen direkt ueberschrieben werden, ohne vorher schwarz zu werden.
     static unsigned long lastDisplayMs = 0;
-    static bool    c_paired   = false;
-    static uint8_t c_position = 0xFF, c_lap = 0, c_lapTotal = 0, c_item = 0;
-    static uint8_t c_batPct   = 0xFF, c_carBat = 0xFF;
-    static bool    c_bY = false, c_bG = false, c_bB = false, c_bR = false;
+    static int16_t c_lx, c_ly, c_rx, c_ry;
+    static bool    c_bY, c_bG, c_bB, c_bR;
+    static uint8_t c_batPct, c_carBat;
+    static char    c_status[32];
 
-    bool changed = (paired             != c_paired)   ||
-                   (feedback.position  != c_position) ||
-                   (feedback.lap       != c_lap)      ||
-                   (feedback.lapTotal  != c_lapTotal)  ||
-                   (feedback.item      != c_item)      ||
-                   (feedback.carBat    != c_carBat)    ||
-                   (batPct             != c_batPct)   ||
-                   (bYellow != c_bY) || (bGreen != c_bG) ||
-                   (bBlue   != c_bB) || (bRed   != c_bR);
-    if (!changed || millis() - lastDisplayMs < DISPLAY_PERIOD_MS) return;
-    lastDisplayMs = millis();
+    bool full = !normalOnScreen;
+    if (!full && nowMs() - lastDisplayMs < DISPLAY_PERIOD_MS) return;
+    lastDisplayMs = nowMs();
 
-    c_paired    = paired;
-    c_position  = feedback.position;
-    c_lap       = feedback.lap;
-    c_lapTotal  = feedback.lapTotal;
-    c_item      = feedback.item;
-    c_carBat    = feedback.carBat;
-    c_batPct    = batPct;
-    c_bY = bYellow; c_bG = bGreen; c_bB = bBlue; c_bR = bRed;
+    if (full) {
+        dispClear();
+        normalOnScreen = true;
+        display.setTextSize(1);
+        display.setTextColor(COL_DIM);
+        display.setCursor(6, 10);
+        display.print(fbMode == MODE_DIRECT ? "DIRECT" : "GAME");
+        display.setCursor(TFT_W - 108, 10);
+        display.print("KART");
+        display.drawFastHLine(0, RULE_Y, TFT_W, COL_DIM);
+    }
 
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0,  0); display.printf("LX:%4d  LY:%4d", lx, ly);
-    display.setCursor(0,  8); display.printf("RX:%4d  RY:%4d", rx, ry);
-    display.setCursor(0, 16); display.printf("Y:%d G:%d B:%d R:%d", bYellow, bGreen, bBlue, bRed);
-    display.setCursor(0, 24);
-    if (!paired)
-        display.print("Suche...");
-    else if (feedback.position > 0)
-        display.printf("P:%d L:%d/%d Item:%d", feedback.position, feedback.lap, feedback.lapTotal, feedback.item);
-    else
-        display.print("Verbunden");
-    drawBatteryIcon(batPct);
-    drawBatteryIconBars(feedback.carBat, 95, 1);
-    display.display();
+    // Kopfzeile: Akku FB rechts, Akku Auto links daneben. Aendert sich selten,
+    // die kleine Flaeche vorher zu loeschen faellt nicht auf.
+    if (full || batPct != c_batPct || feedback.carBat != c_carBat) {
+        c_batPct = batPct;
+        c_carBat = feedback.carBat;
+        display.fillRect(TFT_W - 74, 6, 72, 14, COL_BG);
+        drawBatteryIconBars(feedback.carBat, TFT_W - 74, 6, COL_DIM);
+        drawBatteryIcon(batPct);
+    }
+
+    display.setTextSize(2);
+    display.setTextColor(COL_FG, COL_BG);
+    if (full || lx != c_lx || ly != c_ly || rx != c_rx || ry != c_ry) {
+        c_lx = lx; c_ly = ly; c_rx = rx; c_ry = ry;
+        display.setCursor(6, BODY_Y);          display.printf("LX:%4d  LY:%4d", lx, ly);
+        display.setCursor(6, BODY_Y + LINE_H); display.printf("RX:%4d  RY:%4d", rx, ry);
+    }
+    if (full || bYellow != c_bY || bGreen != c_bG || bBlue != c_bB || bRed != c_bR) {
+        c_bY = bYellow; c_bG = bGreen; c_bB = bBlue; c_bR = bRed;
+        display.setCursor(6, BODY_Y + LINE_H * 2);
+        display.printf("Y:%d G:%d B:%d R:%d", bYellow, bGreen, bBlue, bRed);
+    }
+
+    // Statuszeile: zentriert und mit wechselnder Laenge — nur bei Textwechsel
+    // die Zeile loeschen und neu setzen, das passiert selten.
+    char status[32];
+    uint16_t statusCol;
+    if (BAT_WIRED && batPct == 0) {
+        snprintf(status, sizeof(status), "%s", S().batEmpty);
+        statusCol = COL_CRIT;
+    } else if (!paired) {
+        snprintf(status, sizeof(status), "Suche...");
+        statusCol = COL_ACCENT;
+    } else if (feedback.position > 0) {
+        snprintf(status, sizeof(status), "P:%d  L:%d/%d  Item:%d",
+                 feedback.position, feedback.lap, feedback.lapTotal, feedback.item);
+        statusCol = COL_OK;
+    } else {
+        snprintf(status, sizeof(status), "Verbunden");
+        statusCol = COL_OK;
+    }
+    if (full || strcmp(status, c_status) != 0) {
+        strcpy(c_status, status);
+        int y = BODY_Y + LINE_H * 3 + 12;
+        display.fillRect(0, y, TFT_W, CH_H, COL_BG);
+        dispCentered(status, y, 2, statusCol);
+    }
+    display.setTextColor(COL_FG);
 }
 
 // ──────────────────────────────────────────────
-// Display: Menü
+// Display: Verbindungsaufbau
 // ──────────────────────────────────────────────
 void displayConnecting() {
     if (!dispOK) return;
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    if (trySavedChannel) {
-        display.setCursor((128 - (int)strlen(S().rejoiningLine1) * 6) / 2, 24);
-        display.print(S().rejoiningLine1);
-        display.setCursor((128 - (int)strlen(S().rejoiningLine2) * 6) / 2, 34);
-        display.print(S().rejoiningLine2);
+    // Der Inhalt aendert sich fast nie — ohne Change-Detection wurde hier alle
+    // 500ms der komplette Schirm schwarz gefuellt und neu beschrieben, was als
+    // Schwarzblitzen sichtbar ist. Jetzt nur noch zeichnen, wenn sich wirklich
+    // etwas geaendert hat.
+    static bool    c_valid = false;
+    static bool    c_saved = false;
+    static FBMode  c_mode  = MODE_DIRECT;
+    static uint8_t c_bat   = 0xFF;
+
+    bool rejoin = trySavedChannel || reconnecting;
+    if (c_valid && rejoin == c_saved
+                && fbMode == c_mode && batPct == c_bat) return;
+    c_valid = true;
+    c_saved = rejoin;
+    c_mode  = fbMode;
+    c_bat   = batPct;
+
+    dispClear();
+    if (rejoin) {
+        dispCentered(S().rejoiningLine1, 58, 2, COL_FG);
+        dispCentered(S().rejoiningLine2, 84, 2, COL_FG);
     } else {
         const char* msg = (fbMode == MODE_DIRECT) ? S().connectingDirect : S().connectingGame;
-        display.setCursor((128 - (int)strlen(msg) * 6) / 2, 28);
-        display.print(msg);
+        dispCentered(msg, 72, 2, COL_FG);
     }
     drawBatteryIcon(batPct);
-    display.display();
 }
 
 void displayMapping(int8_t slot) {
     if (!dispOK) return;
-    display.clearDisplay();
-    display.setTextColor(SSD1306_WHITE);
-    display.setTextSize(1);
-    display.setCursor(40, 8);
-    display.print("Mapping");
-    display.setTextSize(4);
-    display.setCursor(50, 24);
-    display.print(slot);
-    display.display();
+    dispClear();
+    dispCentered("Mapping", 34, 2, COL_DIM);
+    char buf[4];
+    snprintf(buf, sizeof(buf), "%d", slot);
+    dispCentered(buf, 74, 6, COL_ACCENT);
 }
 
+// ──────────────────────────────────────────────
+// Display: Menue — 6 von 9 Eintraegen sichtbar
+// ──────────────────────────────────────────────
 void displayMenu() {
     if (!dispOK) return;
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.print(S().menuTitle);
-    display.drawFastHLine(0, 9, 128, SSD1306_WHITE);
+    dispClear();
+    dispTitle(S().menuTitle);
+
     for (int i = menuScroll; i < menuScroll + MENU_VISIBLE && i < MENU_ITEM_COUNT; i++) {
-        int y = 11 + (i - menuScroll) * 8;
-        char buf[22];
+        int y = 34 + (i - menuScroll) * LINE_H;
+        char buf[32];
         const char* itemText = S().menuItems[i];
         if (i == 5) {
             snprintf(buf, sizeof(buf), "Rumble: %s",
@@ -560,25 +771,29 @@ void displayMenu() {
                 swapSticks ? S().swapOn : S().swapOff);
             itemText = buf;
         }
-        char truncBuf[21];
-        if (strlen(itemText) > 20) {
-            memcpy(truncBuf, itemText, 20);
-            truncBuf[20] = '\0';
+        // 320px / 12px = 26 Zeichen, minus Rand und Scrollbar
+        char truncBuf[25];
+        if (strlen(itemText) > 24) {
+            memcpy(truncBuf, itemText, 24);
+            truncBuf[24] = '\0';
             itemText = truncBuf;
         }
-        if (i == menuSel)
-            dispHighlight(y, itemText, 8);
-        else {
-            display.setCursor(4, y);
+        if (i == menuSel) {
+            dispHighlight(y, itemText);
+        } else {
+            display.setTextSize(2);
+            display.setTextColor(COL_FG);
+            display.setCursor(6, y + (LINE_H - CH_H) / 2);
             display.print(itemText);
         }
     }
-    // Scrollbar
-    display.drawFastVLine(127, 11, 52, SSD1306_WHITE);
-    uint8_t thumbH = (uint8_t)(52 * MENU_VISIBLE / MENU_ITEM_COUNT);
-    uint8_t thumbY = (uint8_t)(11 + (uint16_t)(52 - thumbH) * menuScroll / (MENU_ITEM_COUNT - MENU_VISIBLE));
-    display.fillRect(126, thumbY, 2, thumbH, SSD1306_WHITE);
-    display.display();
+
+    // Scrollbar rechts
+    const int barY = 34, barH = MENU_VISIBLE * LINE_H;
+    display.drawFastVLine(TFT_W - 3, barY, barH, COL_DIM);
+    int thumbH = barH * MENU_VISIBLE / MENU_ITEM_COUNT;
+    int thumbY = barY + (barH - thumbH) * menuScroll / (MENU_ITEM_COUNT - MENU_VISIBLE);
+    display.fillRect(TFT_W - 5, thumbY, 4, thumbH, COL_ACCENT);
 }
 
 // ──────────────────────────────────────────────
@@ -586,19 +801,15 @@ void displayMenu() {
 // ──────────────────────────────────────────────
 void displayOffsetRelease() {
     if (!dispOK) return;
-    display.clearDisplay();
+    dispClear();
     dispTitle(S().calOffTitle);
-    display.setCursor(0, 22);
-    display.println(S().calOffRelease);
-    display.display();
+    dispCentered(S().calOffRelease, 88, 2, COL_FG);
 }
 void displayOffsetDoing() {
     if (!dispOK) return;
-    display.clearDisplay();
+    dispClear();
     dispTitle(S().calOffTitle);
-    display.setCursor(0, 28);
-    display.println(S().calOffDoing);
-    display.display();
+    dispCentered(S().calOffDoing, 88, 2, COL_ACCENT);
 }
 
 // ──────────────────────────────────────────────
@@ -606,61 +817,65 @@ void displayOffsetDoing() {
 // ──────────────────────────────────────────────
 void displayMinMaxStep(uint8_t step) {
     if (!dispOK) return;
-    display.clearDisplay();
+    dispClear();
     dispTitle(S().calMMTitle);
-    display.setCursor(0, 16);
-    display.println(S().calMMSteps[step].line1);
-    display.setCursor(0, 26);
-    display.println(S().calMMSteps[step].line2);
-    display.setCursor(0, 44);
-    display.printf("%s %d/8", S().calMMStep, step + 1);
-    display.setCursor(0, 54);
-    display.println(S().calMMConfirm);
-    display.display();
+    dispCentered(S().calMMSteps[step].line1, 48, 2, COL_FG);
+    dispCentered(S().calMMSteps[step].line2, 74, 2, COL_FG);
+
+    char buf[24];
+    snprintf(buf, sizeof(buf), "%s %d/8", S().calMMStep, step + 1);
+    dispCentered(buf, 110, 2, COL_DIM);
+    dispCentered(S().calMMConfirm, 140, 2, COL_ACCENT);
 }
 
 // ──────────────────────────────────────────────
 // Display: Trim-Bar
-// Aktive Positionen (vom Zentrum bis zum Trimwert) werden invertiert.
+// 21 Stufen als Balken; aktiv ist alles zwischen Mitte und Trimwert.
 // ──────────────────────────────────────────────
 void displayTrimBar(int8_t trim) {
     if (!dispOK) return;
-    display.clearDisplay();
+    dispClear();
     dispTitle(S().trimTitle);
-    display.setCursor(1, 28);
+
+    const int segW = 13, gap = 2, barH = 34, barY = 56;
+    const int totalW = TRIM_STEPS * segW + (TRIM_STEPS - 1) * gap;
+    const int x0 = (TFT_W - totalW) / 2;
     for (int i = 0; i < TRIM_STEPS; i++) {
         int pos = i - 10;
         bool active = (trim >= 0) ? (pos >= 0 && pos <= trim)
                                   : (pos <= 0 && pos >= trim);
-        display.setTextColor(active ? SSD1306_BLACK : SSD1306_WHITE,
-                             active ? SSD1306_WHITE : SSD1306_BLACK);
-        display.print('|');
+        int x = x0 + i * (segW + gap);
+        if (active) display.fillRect(x, barY, segW, barH, COL_ACCENT);
+        else        display.drawRect(x, barY, segW, barH, COL_DIM);
     }
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(55, 44);
-    display.printf("%+d", trim);
-    display.display();
+    // Mittenmarkierung
+    display.drawFastVLine(TFT_W / 2, barY - 6, 4, COL_FG);
+
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%+d", trim);
+    dispCentered(buf, 112, 3, COL_FG);
 }
 
 // ──────────────────────────────────────────────
 // Display: Speed-Bar
-// Die aktuelle Stufe wird invertiert dargestellt.
 // ──────────────────────────────────────────────
 void displaySpeedBar(uint8_t speed) {
     if (!dispOK) return;
-    display.clearDisplay();
+    dispClear();
     dispTitle(S().speedTitle);
-    display.setCursor(4, 28);
+
+    const int segW = 26, gap = 4, barH = 34, barY = 56;
+    const int totalW = SPEED_STEPS * segW + (SPEED_STEPS - 1) * gap;
+    const int x0 = (TFT_W - totalW) / 2;
     for (int i = 1; i <= SPEED_STEPS; i++) {
-        bool active = (i == (int)speed);
-        display.setTextColor(active ? SSD1306_BLACK : SSD1306_WHITE,
-                             active ? SSD1306_WHITE : SSD1306_BLACK);
-        display.print('|');
+        int x = x0 + (i - 1) * (segW + gap);
+        if (i <= (int)speed) display.fillRect(x, barY, segW, barH, COL_ACCENT);
+        else                 display.drawRect(x, barY, segW, barH, COL_DIM);
     }
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(72, 44);
-    display.printf("%3d%%", speed * 10);
-    display.display();
+
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%d%%", speed * 10);
+    dispCentered(buf, 112, 3, COL_FG);
 }
 
 // ──────────────────────────────────────────────
@@ -668,28 +883,29 @@ void displaySpeedBar(uint8_t speed) {
 // ──────────────────────────────────────────────
 void displayResetCountdown(int secs) {
     if (!dispOK) return;
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(24, 4);
-    display.print("Reset in");
-    display.setTextSize(4);
-    display.setCursor(44, 24);
-    display.print(secs);
-    display.print("s");
-    display.display();
+    // Wird einmal pro Sekunde aufgerufen. Nur beim ersten Mal komplett loeschen,
+    // danach reicht das Ziffernfeld — sonst blitzt der Schirm im Sekundentakt.
+    static int c_last = -1;
+    if (c_last < 0 || secs > c_last) {
+        dispClear();
+        dispCentered("Reset in", 30, 2, COL_FG);
+    } else {
+        display.fillRect(0, 74, TFT_W, 48, COL_BG);
+    }
+    c_last = secs;
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%ds", secs);
+    dispCentered(buf, 74, 6, COL_CRIT);
 }
 
 // ──────────────────────────────────────────────
-// Display: Reset-Bestätigung
+// Display: Reset-Bestaetigung
 // ──────────────────────────────────────────────
 void displayReset() {
     if (!dispOK) return;
-    display.clearDisplay();
+    dispClear();
     dispTitle(S().resetTitle);
-    display.setCursor(0, 28);
-    display.println(S().resetDone);
-    display.display();
+    dispCentered(S().resetDone, 88, 2, COL_FG);
 }
 
 // ──────────────────────────────────────────────
@@ -697,25 +913,26 @@ void displayReset() {
 // ──────────────────────────────────────────────
 void displayLanguage(uint8_t sel) {
     if (!dispOK) return;
-    display.clearDisplay();
+    dispClear();
     dispTitle(S().langTitle);
     for (int i = 0; i < LANG_COUNT; i++) {
-        int y = 14 + i * 14;
-        if (i == (int)sel)
+        int y = 48 + i * (LINE_H + 10);
+        if (i == (int)sel) {
             dispHighlight(y, S().langNames[i]);
-        else {
-            display.setCursor(4, y + 1);
+        } else {
+            display.setTextSize(2);
+            display.setTextColor(COL_FG);
+            display.setCursor(6, y + (LINE_H - CH_H) / 2);
             display.print(S().langNames[i]);
         }
     }
-    display.display();
 }
 
 // ──────────────────────────────────────────────
 // Joystick-Richtung für Menünavigation (Rohwerte)
 // ──────────────────────────────────────────────
 int8_t jsMenuY(int16_t rawLY, int16_t rawRY) {
-    unsigned long now = millis();
+    unsigned long now = nowMs();
     if (now - lastMenuMove < MENU_COOLDOWN) return 0;
     if (max(rawLY, rawRY) > JS_MENU_HIGH) { lastMenuMove = now; return  1; }
     if (min(rawLY, rawRY) < JS_MENU_LOW)  { lastMenuMove = now; return -1; }
@@ -723,14 +940,14 @@ int8_t jsMenuY(int16_t rawLY, int16_t rawRY) {
 }
 
 int8_t jsMenuX(int16_t rawLX, int16_t rawRX) {
-    unsigned long now = millis();
+    unsigned long now = nowMs();
     if (now - lastMenuMove < MENU_COOLDOWN) return 0;
     if (max(rawLX, rawRX) > JS_MENU_HIGH) { lastMenuMove = now; return  1; }
     if (min(rawLX, rawRX) < JS_MENU_LOW)  { lastMenuMove = now; return -1; }
     return 0;
 }
 
-void sendConfigPacket();  // forward declaration (definiert im ESP-NOW-Block)
+void sendConfigPacket(int8_t trim, bool save);  // forward declaration (definiert im ESP-NOW-Block)
 
 // ──────────────────────────────────────────────
 // Display: Debug
@@ -739,26 +956,36 @@ void displayDebug(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
                   bool bY, bool bG, bool bB, bool bR) {
     if (!dispOK) return;
     static unsigned long lastDebugMs = 0;
-    if (millis() - lastDebugMs < 100) return;
-    lastDebugMs = millis();
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.print("Debug");
-    display.drawFastHLine(0, 9, 128, SSD1306_WHITE);
-    display.setCursor(0, 11); display.printf("LX:%4d  LY:%4d", lx, ly);
-    display.setCursor(0, 19); display.printf("RX:%4d  RY:%4d", rx, ry);
-    display.setCursor(0, 27); display.printf("Y:%d G:%d B:%d R:%d", bY, bG, bB, bR);
-    display.setCursor(0, 35); display.printf("%.2fV %3d%% %s Ch:%d",
+    if (nowMs() - lastDebugMs < 200) return;
+    lastDebugMs = nowMs();
+
+    // Die Debugwerte aendern sich staendig, Change-Detection bringt hier nichts.
+    // Stattdessen: nur beim Betreten einmal loeschen, danach mit deckendem Text
+    // (Vorder- UND Hintergrundfarbe) die alten Zeichen direkt ueberschreiben.
+    // Ohne das fuellt jeder Frame den Schirm schwarz — 5x pro Sekunde sichtbar.
+    static FBState c_state = STATE_READY;
+    bool fresh = (c_state != STATE_DEBUG);
+    c_state = state;
+    if (fresh) {
+        dispClear();
+        dispTitle("Debug");
+    }
+
+    display.setTextSize(2);
+    display.setTextColor(COL_FG, COL_BG);
+    display.setCursor(6, BODY_Y);              display.printf("LX:%4d  LY:%4d ", lx, ly);
+    display.setCursor(6, BODY_Y + LINE_H);     display.printf("RX:%4d  RY:%4d ", rx, ry);
+    display.setCursor(6, BODY_Y + LINE_H * 2); display.printf("Y:%d G:%d B:%d R:%d ", bY, bG, bB, bR);
+    display.setCursor(6, BODY_Y + LINE_H * 3); display.printf("%.2fV %3d%% %s Ch:%-2d ",
         batVolt, batPct,
         fbMode == MODE_DIRECT ? "D" : "G",
-        (int)wifi_get_channel());
+        (int)getChannel());
     uint8_t curMac[6];
-    wifi_get_macaddr(STATION_IF, curMac);
-    display.setCursor(0, 43); display.printf("%02X:%02X:%02X:%02X:%02X:%02X",
+    getMac(curMac);
+    display.setCursor(6, BODY_Y + LINE_H * 4);
+    display.printf("%02X:%02X:%02X:%02X:%02X:%02X",
         curMac[0], curMac[1], curMac[2], curMac[3], curMac[4], curMac[5]);
-    display.display();
+    display.setTextColor(COL_FG);
 }
 
 // ──────────────────────────────────────────────
@@ -768,7 +995,7 @@ void displayDebug(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
 bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
                  bool bGreen, bool bBlue,
                  int16_t rawLX, int16_t rawLY, int16_t rawRX, int16_t rawRY) {
-    unsigned long now = millis();
+    unsigned long now = nowMs();
 
     switch (state) {
 
@@ -787,7 +1014,7 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
             } else {
                 calHoldStart = 0;
             }
-            if (paired) ledReady();
+            if (paired && !reconnecting) ledReady();
             return true;
 
         case STATE_MENU: {
@@ -799,7 +1026,7 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
                 if (menuSel >= menuScroll + MENU_VISIBLE) menuScroll = menuSel - MENU_VISIBLE + 1;
                 displayMenu();
             }
-            if (bYellowP) {
+            if (bGreenP) {
                 switch (menuSel) {
                     case 0: // Offset-Kalibrierung
                         state = STATE_CAL_OFFSET_PULSE;
@@ -814,7 +1041,9 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
                         displayMinMaxStep(0);
                         break;
                     case 2: // Trim
-                        trimTemp = servoTrim;
+                        // Startwert ist der echte Trim des Autos aus dem Feedback
+                        trimOrig = feedback.trim;
+                        trimTemp = trimOrig;
                         state = STATE_TRIM;
                         displayTrimBar(trimTemp);
                         break;
@@ -830,7 +1059,7 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
                         break;
                     case 5: // Rumble toggle (temporär, kein EEPROM)
                         rumbleEnabled = !rumbleEnabled;
-                        if (rumbleEnabled) rumbleFbEnd = millis() + 5000;
+                        if (rumbleEnabled) rumbleFbEnd = nowMs() + 5000;
                         displayMenu();
                         break;
                     case 6: // Joysticks tauschen (temporär, kein EEPROM)
@@ -877,7 +1106,7 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
 
         case STATE_CAL_MINMAX:
             ledYellow();
-            if (bYellowP) {
+            if (bGreenP) {
                 int16_t raw[4] = {rawLX, rawLY, rawRX, rawRY};
                 int ch = CAL_STEP_CH[calStep];
                 if (CAL_STEP_ISMAX[calStep])
@@ -909,9 +1138,10 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
             if (dir) {
                 trimTemp = constrain(trimTemp + dir, TRIM_MIN, TRIM_MAX);
                 displayTrimBar(trimTemp);
+                sendConfigPacket(trimTemp, false);   // Vorschau: Raeder bewegen sich sofort
             }
-            if (bYellowP) { servoTrim = trimTemp; saveSettings(); sendConfigPacket(); state = STATE_MENU; displayMenu(); }
-            if (bRedP) { state = STATE_MENU; displayMenu(); }
+            if (bGreenP) { sendConfigPacket(trimTemp, true);  feedback.trim = trimTemp; state = STATE_MENU; displayMenu(); }
+            if (bRedP)   { sendConfigPacket(trimOrig, false); state = STATE_MENU; displayMenu(); }
             return false;
         }
 
@@ -921,7 +1151,7 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
                 speedTemp = constrain((int)speedTemp + dir, 1, SPEED_STEPS);
                 displaySpeedBar(speedTemp);
             }
-            if (bYellowP) { maxSpeed = speedTemp; state = STATE_MENU; displayMenu(); }
+            if (bGreenP) { maxSpeed = speedTemp; state = STATE_MENU; displayMenu(); }
             if (bRedP) { state = STATE_MENU; displayMenu(); }
             return false;
         }
@@ -940,7 +1170,7 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
                 langTemp = constrain((int)langTemp + dir, 0, LANG_COUNT - 1);
                 displayLanguage(langTemp);
             }
-            if (bYellowP) { langIndex = langTemp; saveSettings(); state = STATE_MENU; displayMenu(); }
+            if (bGreenP) { langIndex = langTemp; saveSettings(); state = STATE_MENU; displayMenu(); }
             if (bRedP) { state = STATE_MENU; displayMenu(); }
             return false;
         }
@@ -955,7 +1185,67 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
 // ──────────────────────────────────────────────
 // ESP-NOW
 // ──────────────────────────────────────────────
-void onDataRecv(uint8_t *senderMac, uint8_t *data, uint8_t len) {
+static void setChannel(uint8_t ch) {
+    esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+}
+
+static uint8_t getChannel() {
+    uint8_t pri = 0;
+    wifi_second_chan_t sec;
+    esp_wifi_get_channel(&pri, &sec);
+    return pri;
+}
+
+static void setMac(const uint8_t* mac) {
+    esp_wifi_set_mac(WIFI_IF_STA, (uint8_t*)mac);
+}
+
+static void getMac(uint8_t* out) {
+    esp_wifi_get_mac(WIFI_IF_STA, out);
+}
+
+static void addPeer(const uint8_t* mac) {
+    esp_now_peer_info_t peer{};
+    memcpy(peer.peer_addr, mac, 6);
+    peer.channel = 0;      // 0 = Home-Channel verwenden, kein Mismatch moeglich
+    peer.encrypt = false;
+    if (!esp_now_is_peer_exist(mac)) esp_now_add_peer(&peer);
+}
+
+// Suchzustand vollstaendig wiederherstellen.
+// Ohne das hing die FB nach einem Verbindungsverlust auf "warte auf Auto":
+// sie blieb auf dem Betriebskanal (das Auto beacont nach seinem Neustart aber
+// auf Kanal 1) UND hatte ihre echte MAC statt der gespooften MK_BASE_MAC — sie
+// konnte die Beacons also aus zwei Gruenden nicht hoeren.
+static void enterSearchState() {
+    paired          = false;
+    trySavedChannel = false;
+    pairingBeaconRx = false;
+    pairingAssignRx = false;
+    feedback        = FeedbackState{};
+    rumbleFbEnd     = 0;
+
+    uint8_t zero = 0;
+    uint8_t noMac[6] = {};
+    EEPROM.put(EEPROM_ADDR_CHANNEL, zero);
+    EEPROM.put(EEPROM_ADDR_CARMAC, noMac);
+    EEPROM.commit();
+    reconnecting = false;
+
+    if (fbMode == MODE_DIRECT) {
+        if (esp_now_is_peer_exist(peerMac)) esp_now_del_peer(peerMac);
+        uint8_t fakeMac[] = MK_BASE_MAC;
+        setMac(fakeMac);
+    }
+    setChannel(MK_ESPNOW_CHANNEL);
+
+    lastFeedbackMs = nowMs();
+    stateStart     = nowMs();
+    Serial.println("[ESPNOW] Zurueck in Suchzustand (Kanal 1, MAC gespooft)");
+}
+
+void onDataRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+    const uint8_t* senderMac = info->src_addr;
     if (len < 1) return;
     uint8_t msgType = data[0];
     if (!paired) {
@@ -977,10 +1267,11 @@ void onDataRecv(uint8_t *senderMac, uint8_t *data, uint8_t len) {
         feedbackRaw.item     = fb->item;
         feedbackRaw.rumble   = fb->rumble;
         feedbackRaw.carBat   = fb->carBat;
+        feedbackRaw.trim     = fb->trim;
         feedbackNew = true;
     } else if (msgType == MSG_CHANNEL_SWITCH && len >= (int)sizeof(MK_ChannelSwitch)) {
         uint8_t ch = ((const MK_ChannelSwitch*)data)->channel;
-        wifi_set_channel(ch);
+        setChannel(ch);
         pendingChannelSave = ch;
     } else if (msgType == MSG_MAPPING && len >= (int)sizeof(MK_Mapping)) {
         mappingSlot = ((const MK_Mapping*)data)->slot;
@@ -989,35 +1280,76 @@ void onDataRecv(uint8_t *senderMac, uint8_t *data, uint8_t len) {
 
 void initEspNow() {
     WiFi.mode(WIFI_STA);
+    // Kein Modem-Sleep: mit dem SYSTIMER-Fehler (mk_clock_guard.h) kann der
+    // Funk-Stack sonst in einen Watchdog-Absturz laufen. Ohne Router-Verbindung
+    // spart der Modus ohnehin kaum etwas.
+    esp_wifi_set_ps(WIFI_PS_NONE);
     WiFi.disconnect();
     WiFi.macAddress(realMac);
-    if (fbMode == MODE_DIRECT) {
-        uint8_t fakeMac[] = MK_BASE_MAC;
-        wifi_set_macaddr(STATION_IF, fakeMac);
-        Serial.println("[ESPNOW] Direct: MAC → DE:AD:BE:EF:BA:5E");
-    }
     uint8_t savedCh = 0;
     EEPROM.get(EEPROM_ADDR_CHANNEL, savedCh);
-    if (savedCh >= 1 && savedCh <= 13) {
-        wifi_set_channel(savedCh);
+    uint8_t carMac[6];
+    EEPROM.get(EEPROM_ADDR_CARMAC, carMac);
+    bool carMacValid = false;
+    for (int i = 0; i < 6; i++)
+        if (carMac[i] != 0x00 && carMac[i] != 0xFF) carMacValid = true;
+
+    // Direct-Reconnect: die FB ist Master und kennt Kanal und Auto aus dem
+    // EEPROM. Sie spricht das Auto direkt mit ihrer echten MAC an und sendet
+    // Steuerpakete — kein Beacon, kein Assign, kein Umweg ueber Kanal 1 (dort
+    // gewinnt die erste FB, die Zuordnung koennte wechseln). Kommt Feedback,
+    // steht die Verbindung; sonst nach RECONNECT_BOOT_MS Rueckfall auf Kanal 1.
+    if (fbMode == MODE_DIRECT && savedCh != MK_ESPNOW_CHANNEL
+            && savedCh >= 1 && savedCh <= 13 && carMacValid) {
+        setChannel(savedCh);
+        if (esp_now_init() != ESP_OK) { Serial.println("[ESPNOW] Init fehlgeschlagen"); return; }
+        esp_now_register_recv_cb(onDataRecv);
+        memcpy(peerMac, carMac, 6);
+        addPeer(peerMac);
+        paired         = true;
+        reconnecting   = true;
+        reconnectStart = nowMs();
+        reconnectLimit = RECONNECT_BOOT_MS;
+        lastFeedbackMs = nowMs();
+        Serial.printf("[ESPNOW] Direct: melde mich bei %02X:%02X:%02X:%02X:%02X:%02X auf Kanal %d\n",
+            carMac[0], carMac[1], carMac[2], carMac[3], carMac[4], carMac[5], savedCh);
+        return;
+    }
+
+    if (fbMode == MODE_DIRECT) {
+        uint8_t fakeMac[] = MK_BASE_MAC;
+        setMac(fakeMac);
+        Serial.println("[ESPNOW] Direct: MAC → DE:AD:BE:EF:BA:5E");
+    }
+    if (fbMode == MODE_GAME && savedCh >= 1 && savedCh <= 13) {
+        setChannel(savedCh);
         trySavedChannel  = true;
-        savedChannelStart = millis();
+        savedChannelStart = nowMs();
         Serial.printf("[ESPNOW] Gespeicherter Kanal %d – warte auf Pairing\n", savedCh);
     } else {
-        wifi_set_channel(MK_ESPNOW_CHANNEL);
+        setChannel(MK_ESPNOW_CHANNEL);
     }
-    if (esp_now_init() != 0) { Serial.println("[ESPNOW] Init fehlgeschlagen"); return; }
-    esp_now_set_self_role(ESP_NOW_ROLE_COMBO);
+    if (esp_now_init() != ESP_OK) { Serial.println("[ESPNOW] Init fehlgeschlagen"); return; }
     esp_now_register_recv_cb(onDataRecv);
     if (fbMode == MODE_GAME) {
         uint8_t baseMac[] = MK_BASE_MAC;
-        esp_now_add_peer(baseMac, ESP_NOW_ROLE_COMBO, MK_ESPNOW_CHANNEL, NULL, 0);
+        addPeer(baseMac);
     }
     Serial.printf("[ESPNOW] Init OK, Kanal %d\n", MK_ESPNOW_CHANNEL);
 }
 
 void handlePairing() {
-    if (trySavedChannel && !paired && millis() - savedChannelStart > SAVED_CHANNEL_TIMEOUT_MS) {
+    if (reconnecting && nowMs() - reconnectStart > reconnectLimit) {
+        uint8_t zero = 0;
+        uint8_t noMac[6] = {};
+        EEPROM.put(EEPROM_ADDR_CHANNEL, zero);
+        EEPROM.put(EEPROM_ADDR_CARMAC, noMac);
+        EEPROM.commit();
+        Serial.printf("[ESPNOW] %lus kein Feedback vom Auto → Reboot auf Kanal 1\n",
+                      reconnectLimit / 1000);
+        ESP.restart();
+    }
+    if (trySavedChannel && !paired && nowMs() - savedChannelStart > SAVED_CHANNEL_TIMEOUT_MS) {
         uint8_t zero = 0;
         EEPROM.put(EEPROM_ADDR_CHANNEL, zero);
         EEPROM.commit();
@@ -1028,11 +1360,21 @@ void handlePairing() {
     if (fbMode == MODE_DIRECT && pairingBeaconRx) {
         pairingBeaconRx = false;
         memcpy(peerMac, pairingCarMac, 6);
-        esp_now_add_peer(peerMac, ESP_NOW_ROLE_COMBO, MK_ESPNOW_CHANNEL, NULL, 0);
-        wifi_set_macaddr(STATION_IF, realMac);
+        addPeer(peerMac);
+        // MAC-Wechsel gespoofte Basis-MAC → echte MAC. Der WLAN-Stack
+        // initialisiert dabei intern neu; ein unmittelbar danach gesendetes
+        // Paket ging auf dem ESP8266 regelmaessig verloren (Bug 2026-09-03: das
+        // Auto bekam nur den ChannelSwitch, lief ungepairt in den 5s-Timeout,
+        // loeschte EEPROM und startete neu — waehrend die FB sich fuer
+        // verbunden hielt). Deshalb absetzen lassen und doppelt senden; das
+        // Auto verwirft ein zweites Assign bei bestehendem Pairing ohnehin.
+        setMac(realMac);
+        delay(50);
         MK_Assign assign;
         assign.slot = 1;
         memcpy(assign.baseMac, realMac, 6);
+        esp_now_send(peerMac, (uint8_t*)&assign, sizeof(assign));
+        delay(20);
         esp_now_send(peerMac, (uint8_t*)&assign, sizeof(assign));
         // Zufälligen Betriebskanal wählen und Auto zum Wechsel auffordern
         const uint8_t channels[] = MK_DIRECT_CHANNELS;
@@ -1042,22 +1384,23 @@ void handlePairing() {
         delay(20);  // kurz warten damit Auto MK_Assign verarbeiten kann
         esp_now_send(peerMac, (uint8_t*)&chSwitch, sizeof(chSwitch));
         delay(20);  // kurz warten damit Auto MK_ChannelSwitch verarbeiten kann
-        wifi_set_channel(ch);
+        setChannel(ch);
         EEPROM.put(EEPROM_ADDR_CHANNEL, ch);
+        EEPROM.put(EEPROM_ADDR_CARMAC, peerMac);
         EEPROM.commit();
         paired = true;
         trySavedChannel = false;
-        lastFeedbackMs = millis();
+        lastFeedbackMs = nowMs();
         Serial.printf("[ESPNOW] Direct: gepairt, Kanal %d\n", ch);
         ledReady();
     }
     if (fbMode == MODE_GAME && pairingAssignRx) {
         pairingAssignRx = false;
         memcpy(peerMac, pairingBaseMac, 6);
-        esp_now_add_peer(peerMac, ESP_NOW_ROLE_COMBO, MK_ESPNOW_CHANNEL, NULL, 0);
+        addPeer(peerMac);
         paired = true;
         trySavedChannel = false;
-        lastFeedbackMs = millis();
+        lastFeedbackMs = nowMs();
         Serial.println("[ESPNOW] Game: gepairt");
         ledReady();
     }
@@ -1065,7 +1408,7 @@ void handlePairing() {
 
 void sendBeacon() {
     if (paired || fbMode != MODE_GAME) return;
-    unsigned long now = millis();
+    unsigned long now = nowMs();
     if (now - lastBeacon < BEACON_INTERVAL_MS) return;
     lastBeacon = now;
     MK_Beacon beacon;
@@ -1085,10 +1428,11 @@ void sendControlInput(int8_t throttle, int8_t steering,
     esp_now_send(peerMac, (uint8_t*)&pkt, sizeof(pkt));
 }
 
-void sendConfigPacket() {
+void sendConfigPacket(int8_t trim, bool save) {
     if (!paired) return;
     MK_ConfigPacket pkt;
-    pkt.trim = servoTrim;
+    pkt.trim = trim;
+    pkt.save = save ? 1 : 0;
     esp_now_send(peerMac, (uint8_t*)&pkt, sizeof(pkt));
 }
 
@@ -1100,30 +1444,41 @@ void handleFeedback() {
         feedback.lapTotal   = feedbackRaw.lapTotal;
         feedback.item       = feedbackRaw.item;
         feedback.carBat     = feedbackRaw.carBat;
+        feedback.trim       = feedbackRaw.trim;
         uint8_t rumbleCmd   = feedbackRaw.rumble;
         feedbackNew = false;
         interrupts();
-        lastFeedbackMs = millis();
-        if (rumbleCmd == 1) rumbleFbEnd = millis() + 200;  // 200ms Safety-Timeout falls rumble=0 verloren geht
+        lastFeedbackMs = nowMs();
+        if (reconnecting) {
+            reconnecting = false;
+            Serial.println("[ESPNOW] Direct: Auto antwortet — wieder verbunden");
+        }
+        if (rumbleCmd == 1) rumbleFbEnd = nowMs() + 200;  // 200ms Safety-Timeout falls rumble=0 verloren geht
         else                rumbleFbEnd = 0;
     }
     // Timeout nur auf Betriebskanal aktiv — Kanal 1 ist Setup-Kanal (Mapping,
     // Pairing), dort schickt die Basis kein Feedback und kein Heartbeat nötig.
-    if (paired && wifi_get_channel() != MK_ESPNOW_CHANNEL
-            && millis() - lastFeedbackMs > FEEDBACK_TIMEOUT_MS) {
-        paired = false;
-        lastFeedbackMs = millis();
-        feedback = FeedbackState{};
+    if (paired && !reconnecting && getChannel() != MK_ESPNOW_CHANNEL
+            && nowMs() - lastFeedbackMs > FEEDBACK_TIMEOUT_MS) {
         Serial.println("[ESPNOW] Verbindung verloren");
+        if (fbMode == MODE_DIRECT) {
+            // Gepairt bleiben, weiter senden: das Auto wartet auf diesem Kanal.
+            reconnecting   = true;
+            reconnectStart = nowMs();
+            reconnectLimit = RECONNECT_LOST_MS;
+            rumbleFbEnd    = 0;
+        } else {
+            enterSearchState();
+        }
     }
 }
 
 void handleRumbleFb() {
     if (!rumbleEnabled || batPct <= BAT_CRIT_PCT) {
-        analogWrite(PIN_RUMBLE, 0);
+        ledcWrite(PIN_RUMBLE, 0);
         return;
     }
-    analogWrite(PIN_RUMBLE, (millis() < rumbleFbEnd) ? RUMBLE_PWM : 0);
+    ledcWrite(PIN_RUMBLE, (nowMs() < rumbleFbEnd) ? RUMBLE_PWM : 0);
 }
 
 // ──────────────────────────────────────────────
@@ -1131,14 +1486,28 @@ void handleRumbleFb() {
 // ──────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
-    Serial.println("[RESET] " + ESP.getResetReason());
+    // USB-CDC: ist das Kabel steckt, aber kein Monitor offen, liest niemand den
+    // Puffer aus — jedes printf wartet dann bis zum TX-Timeout und bremst die
+    // Loop so stark aus, dass Tastendruecke und Steuerpakete verloren gehen.
+    // Mit 0 wird bei vollem Puffer einfach verworfen statt gewartet.
+    Serial.setTxTimeoutMs(0);
+    mkClockGuardBegin();   // SYSTIMER-Fehler des C6 rev v0.2, siehe mk_clock_guard.h
+    // Von fbShutdown() festgehaltene Pins freigeben (falls ein Reset ohne
+    // Stromunterbrechung kam, z.B. ueber USB).
+    gpio_hold_dis((gpio_num_t)PIN_TFT_BL);
+    gpio_hold_dis((gpio_num_t)PIN_RUMBLE);
+    gpio_hold_dis((gpio_num_t)PIN_LED);
+    Serial.printf("[RESET] reason=%d\n", (int)esp_reset_reason());
     pinMode(PIN_BTN_YELLOW, INPUT_PULLUP);
     pinMode(PIN_BTN_GREEN,  INPUT_PULLUP);
     pinMode(PIN_BTN_BLUE,   INPUT_PULLUP);
     pinMode(PIN_BTN_RED,    INPUT_PULLUP);
-    pinMode(PIN_RUMBLE, OUTPUT);
-    analogWrite(PIN_RUMBLE, 0);
-    Wire.begin(D2, D1);
+    // Joystick-Taster: nur definiert halten, bewusst ohne Auswertung.
+    pinMode(PIN_BTN_STICK_L, INPUT_PULLUP);
+    pinMode(PIN_BTN_STICK_R, INPUT_PULLUP);
+    ledcAttach(PIN_RUMBLE, RUMBLE_PWM_FREQ, RUMBLE_PWM_RES);
+    ledcWrite(PIN_RUMBLE, 0);
+    Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
     EEPROM.begin(EEPROM_SIZE);
     led.begin();
     led.setBrightness(80);
@@ -1146,11 +1515,39 @@ void setup() {
     pinMode(PIN_MODE, INPUT);
     fbMode = digitalRead(PIN_MODE) ? MODE_DIRECT : MODE_GAME;
     Serial.printf("[MODE] %s\n", fbMode == MODE_DIRECT ? "Direct" : "Game");
+    // I2C-Scan beim Boot — zeigt sofort, ob nichts am Bus haengt (Verdrahtung,
+    // Versorgung, Pull-ups) oder ob ein Geraet nur auf einer anderen Adresse
+    // sitzt (ADS1115: ADDR→GND 0x48, →VDD 0x49, →SDA 0x4A, →SCL 0x4B).
+    {
+        int found = 0;
+        Serial.print("[I2C] Scan:");
+        for (uint8_t a = 1; a < 127; a++) {
+            Wire.beginTransmission(a);
+            if (Wire.endTransmission() == 0) { Serial.printf(" 0x%02X", a); found++; }
+        }
+        if (!found) Serial.print(" nichts gefunden");
+        Serial.printf("  (%d Geraet(e))\n", found);
+    }
+
     adsOK  = ads.begin(0x48);
     if (adsOK) ads.setDataRate(RATE_ADS1115_860SPS);
-    dispOK = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+    // ST7789 haengt am Hardware-SPI (FSPI). MISO bleibt frei — das Display
+    // liest nicht zurueck, also gibt es keinen Presence-Check wie beim I2C-OLED.
+    // Fehlt das Panel, zeichnet die Firmware ins Leere; auf SPI ist das
+    // folgenlos und still, anders als die I2C-Fehlerflut vorher.
+    pinMode(PIN_TFT_BL, OUTPUT);
+    digitalWrite(PIN_TFT_BL, LOW);          // Backlight aus bis das Bild steht
+    SPI.begin(PIN_TFT_SCK, -1, PIN_TFT_MOSI, PIN_TFT_CS);
+    display.init(TFT_PANEL_W, TFT_PANEL_H);
+    display.setSPISpeed(40000000);
+    display.setRotation(TFT_ROTATION);
+    display.fillScreen(COL_BG);
+    ledcAttach(PIN_TFT_BL, TFT_BL_FREQ, TFT_BL_RES);
+    ledcWrite(PIN_TFT_BL, TFT_BL_LEVEL);
+    dispOK = true;
     if (!adsOK)  Serial.println("[FEHLER] ADS1115 nicht gefunden");
-    if (!dispOK) Serial.println("[FEHLER] SSD1306 nicht gefunden");
+    Serial.printf("[TFT] ST7789 %dx%d init, Rotation %d\n", TFT_W, TFT_H, TFT_ROTATION);
+    if (!BAT_WIRED) Serial.println("[BAT] Teiler nicht verdrahtet (BAT_WIRED=false) — Akku wird als 100% gemeldet");
     if (!digitalRead(PIN_BTN_RED)) {
         Serial.println("[RESET] Boot-Reset via Red");
         resetSettings();
@@ -1163,7 +1560,7 @@ void setup() {
     }
     maxSpeed = SPEED_STEPS;
     updateBattery();
-    lastBatCheck = millis();
+    lastBatCheck = nowMs();
     state = STATE_READY;
     initEspNow();
     ledPulseOrange();
@@ -1219,12 +1616,12 @@ void loop() {
     bool countdownShowing = false;
     if (state == STATE_READY) {
         if (bRed) {
-            if (bRedResetHold == 0) bRedResetHold = millis();
-            unsigned long elapsed = millis() - bRedResetHold;
+            if (bRedResetHold == 0) bRedResetHold = nowMs();
+            unsigned long elapsed = nowMs() - bRedResetHold;
             if (elapsed >= 10000) {
                 resetSettings();
                 state = STATE_RESET;
-                stateStart = millis();
+                stateStart = nowMs();
                 displayReset();
                 bRedResetHold = 0;
                 lastCountdown = -1;
@@ -1242,8 +1639,8 @@ void loop() {
         }
     }
 
-    if (millis() - lastBatCheck >= BAT_CHECK_MS) {
-        lastBatCheck = millis();
+    if (nowMs() - lastBatCheck >= BAT_CHECK_MS) {
+        lastBatCheck = nowMs();
         updateBattery();
     }
 
@@ -1259,9 +1656,27 @@ void loop() {
     sendBeacon();
 
     // Suchzustand: LED pulsiert bis Pairing steht
-    if (state == STATE_READY && !paired) {
+    if (state == STATE_READY && (!paired || reconnecting)) {
         ledPulseOrange();
         displayConnecting();
+    }
+
+    // Display dimmen, wenn 60 s lang weder Stick noch Button bewegt wurde —
+    // spart Akku, wenn die FB herumliegt. Jede Eingabe macht sofort wieder hell.
+    // Im Menue bleibt es hell. Gezaehlt werden nur die im Fahrbetrieb gelesenen
+    // Achsen; mapJS() liefert innerhalb der Dead Zone 0.
+    {
+        static unsigned long lastInputMs = 0;
+        static bool dimmed = false;
+        bool input = bYellow || bGreen || bBlue || bRed || state != STATE_READY
+                  || mapJS(swapSticks ? rawRY : rawLY, swapSticks ? JS_RIGHT_Y : JS_LEFT_Y) != 0
+                  || mapJS(swapSticks ? rawLX : rawRX, swapSticks ? JS_LEFT_X  : JS_RIGHT_X) != 0;
+        if (input || lastInputMs == 0) lastInputMs = nowMs();
+        bool wantDim = nowMs() - lastInputMs > TFT_DIM_AFTER_MS;
+        if (wantDim != dimmed) {
+            dimmed = wantDim;
+            ledcWrite(PIN_TFT_BL, dimmed ? TFT_BL_DIM : TFT_BL_LEVEL);
+        }
     }
 
     bool active = handleState(bYellowP, bGreenP, bBlueP, bRedP, bGreen, bBlue, rawLX, rawLY, rawRX, rawRY);
@@ -1270,6 +1685,12 @@ void loop() {
         // Default: LY→throttle, RX→steering  |  Swapped: RY→throttle, LX→steering
         int8_t throttle = swapSticks ? mapJS(rawRY, JS_RIGHT_Y) : mapJS(rawLY, JS_LEFT_Y);
         int8_t steering = swapSticks ? mapJS(rawLX, JS_LEFT_X)  : mapJS(rawRX, JS_RIGHT_X);
+
+        // Sicherheitsgurt: ohne ADS1115 bleiben die Rohwerte auf 0, und mapJS()
+        // rechnet gegen jsCenter (9994) → -100/-100, also Vollgas rueckwaerts
+        // mit Lenkung voll links. Faellt der ADS im Betrieb aus waehrend die FB
+        // gepairt ist, bekaeme das Auto genau das gesendet.
+        if (!adsOK) { throttle = 0; steering = 0; }
 
         Serial.printf("LX:%6d | LY:%6d | RX:%6d | RY:%6d | Y:%d G:%d B:%d R:%d | thr:%4d str:%4d\n",
             rawLX, rawLY, rawRX, rawRY, bYellow, bGreen, bBlue, bRed, throttle, steering);
@@ -1282,7 +1703,7 @@ void loop() {
                 prevMappingSlot = mappingSlot;
                 displayMapping(mappingSlot);
             }
-        } else if (paired && !countdownShowing) {
+        } else if (paired && !reconnecting && !countdownShowing) {
             prevMappingSlot = -1;
             displayNormal(
                 mapJS(rawLX, JS_LEFT_X), mapJS(rawLY, JS_LEFT_Y),
@@ -1290,6 +1711,13 @@ void loop() {
                 bYellow, bGreen, bBlue, bRed
             );
         }
+    } else if (paired) {
+        // Menue/Kalibrierung: neutrales Steuerpaket als Keepalive. Sonst hoert
+        // das Auto nichts mehr, faellt nach 30s auf Kanal 1 zurueck und die
+        // Zuordnung koennte wechseln. Nebeneffekt: das Auto steht sofort, statt
+        // erst nach seinem 200ms-Timeout, und die Trim-Vorschau zeigt die
+        // Raeder in Mittelstellung plus Trim.
+        sendControlInput(0, 0, false, false, false, false);
     }
 
     if (state == STATE_DEBUG) {
@@ -1302,7 +1730,7 @@ void loop() {
 
     handleRumbleFb();
 
-    unsigned long elapsed = millis() - lastLoopMs;
+    unsigned long elapsed = nowMs() - lastLoopMs;
     if (LOOP_PERIOD_MS > elapsed) delay(LOOP_PERIOD_MS - elapsed);
-    lastLoopMs = millis();
+    lastLoopMs = nowMs();
 }
