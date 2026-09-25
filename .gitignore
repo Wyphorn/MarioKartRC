@@ -2,3 +2,15 @@
 *.pyc
 __pycache__/
 .DS_Store
+
+# KiCad: Locks, Sicherungen, lokale Ansichtseinstellungen
+*.lck
+*.bak
+*.bak-*
+*.kicad_prl
+fp-info-cache
+_restore_backup_*/
+.history/
+# Gerber nur als ZIP fuer den Fertiger, entpackte Kopien nicht
+docs/kart/gerber/controller/
+docs/kart/gerber/kart/

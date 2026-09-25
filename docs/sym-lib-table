@@ -1,0 +1,3 @@
+(sym_lib_table
+  (lib (name "FB_components") (type "KiCad") (uri "${KIPRJMOD}/fb-components.kicad_sym") (options "") (descr "Mario Kart RC FB-Firmware Symbole"))
+)
