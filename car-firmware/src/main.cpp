@@ -10,6 +10,7 @@
 #include <DFRobotDFPlayerMini.h>
 #include "mk_protocol.h"
 #include "mk_clock_guard.h"
+#include "mk_watchdog.h"
 
 // ── Sound tables ─────────────────────────────────────────────────────────────
 // Track numbers match DFPlayer filenames: track 2 → 002.mp3.
@@ -227,21 +228,21 @@ static void eepromSaveChannel(uint8_t ch) {
     gChannel = ch;
     EEPROM.write(EE_ADDR_MAGIC, EE_MAGIC);
     EEPROM.write(EE_ADDR_CHANNEL, ch);
-    EEPROM.commit();
+    { MkWdtPause wdtPause; EEPROM.commit(); }   // Flash-Schreiben haelt auch die Loop an
 }
 
 static void eepromSaveTrim(int8_t trim) {
     gTrim = trim;
     EEPROM.write(EE_ADDR_MAGIC, EE_MAGIC);
     EEPROM.write(EE_ADDR_TRIM, (uint8_t)trim);
-    EEPROM.commit();
+    { MkWdtPause wdtPause; EEPROM.commit(); }   // Flash-Schreiben haelt auch die Loop an
 }
 
 static void eepromSaveBaseMac(const uint8_t* mac) {
     memcpy(gBaseMac, mac, 6);
     EEPROM.write(EE_ADDR_MAGIC, EE_MAGIC);
     for (int i = 0; i < 6; i++) EEPROM.write(EE_ADDR_BASE_MAC + i, mac[i]);
-    EEPROM.commit();
+    { MkWdtPause wdtPause; EEPROM.commit(); }   // Flash-Schreiben haelt auch die Loop an
 }
 
 // Nur das Pairing vergessen (Kanal → 1, FB-MAC → leer). Magic und Trim bleiben
@@ -252,7 +253,7 @@ static void eepromClear() {
     EEPROM.write(EE_ADDR_MAGIC, EE_MAGIC);
     EEPROM.write(EE_ADDR_CHANNEL, MK_ESPNOW_CHANNEL);
     for (int i = 0; i < 6; i++) EEPROM.write(EE_ADDR_BASE_MAC + i, 0x00);
-    EEPROM.commit();
+    { MkWdtPause wdtPause; EEPROM.commit(); }   // Flash-Schreiben haelt auch die Loop an
 }
 
 // ── Motor ─────────────────────────────────────────────────────────────────────
@@ -360,6 +361,7 @@ static uint8_t gBatLowSamples = 0;
 // zurück. Buck, BTS7960-Modul und Servo ziehen weiter ein paar mA — bewusst
 // hingenommen, entscheidend ist, dass nicht mehr gefahren wird.
 static void carShutdown() {
+    mkWatchdogStop();   // 3 s Sound, dann Deep Sleep — RTC-WDT darf nicht weiterlaufen
     gBatCutoff = true;
     Serial.printf("[BAT] %.2fV < %.2fV — Abschaltung (Deep Sleep)\n", gBatVoltage, BAT_OFF_V);
     motorSet(0);
@@ -638,6 +640,7 @@ static void onRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len
 // ── IMU init ──────────────────────────────────────────────────────────────────
 static void imuInit() {
     Wire.begin(PIN_SDA, PIN_SCL);
+    Wire.setTimeOut(5);   // sonst bis 50 ms Warten bei I2C-Stoerung → Loop-Watchdog
     uint8_t who = i2cRead(LSM_ADDR, 0x0F);
     if (who == 0x6C || who == 0x69) {
         i2cWrite(LSM_ADDR, 0x10, 0x44);  // accel 104Hz 16g
@@ -681,6 +684,15 @@ static void checkCollision() {
     }
 }
 
+// Warmstart = Reset ohne Stromunterbrechung (Watchdog, Absturz, ESP.restart(),
+// USB). Tritt beim ESP32-C6 rev v0.2 auch mitten im Rennen auf (Interrupt-WDT,
+// siehe mk_clock_guard.h) — dann zählt jede Sekunde bis zur Fahrbereitschaft.
+// Nur echtes Einschalten, Brownout oder Unbekannt gelten als Kaltstart.
+static bool isWarmBoot() {
+    esp_reset_reason_t r = esp_reset_reason();
+    return !(r == ESP_RST_POWERON || r == ESP_RST_BROWNOUT || r == ESP_RST_UNKNOWN);
+}
+
 // ── Setup ─────────────────────────────────────────────────────────────────────
 // ── DFPlayer-Diagnose ─────────────────────────────────────────────────────────
 // Klärt, ob ein DFPlayer unsere Befehle überhaupt versteht (neue Nachbau-Chips
@@ -717,16 +729,24 @@ void setup() {
     // derselben loop() mit ausbremsen.
     Serial.setTxTimeoutMs(0);
     mkClockGuardBegin();   // SYSTIMER-Fehler des C6 rev v0.2, siehe mk_clock_guard.h
+    mkTickWatchBegin();    // Neustart, wenn der FreeRTOS-Tick stehen bleibt
     // Von carShutdown() festgehaltene Pins freigeben (Reset ohne Stromunterbrechung).
     for (uint8_t pin : { PIN_SERVO, PIN_RPWM, PIN_LPWM, PIN_LIGHT_MAIN,
                          PIN_LIGHT_REV, PIN_IR, PIN_LED })
         gpio_hold_dis((gpio_num_t)pin);
 
+    const bool warm = isWarmBoot();
+
     // DFPlayer UART — start early to catch boot bytes
     gDfSerial.begin(9600, SERIAL_8N1, PIN_DF_RX, PIN_DF_TX);
 
-    delay(5000);
-    Serial.println("\n=== MarioKartRC Auto-Firmware ===");
+    // Kaltstart: DFPlayer hochfahren lassen. Warmstart: der läuft noch.
+    if (!warm) delay(5000);
+    Serial.printf("\n=== MarioKartRC Auto-Firmware === (%s, reset=%d)\n",
+                  warm ? "Warmstart" : "Kaltstart", (int)esp_reset_reason());
+#ifdef MK_TEST_NO_DRIVE
+    Serial.println("[TEST] Motor/Servo deaktiviert (MK_TEST_NO_DRIVE)");
+#endif
 
     // LEDs — blue while booting
     analogSetAttenuation(ADC_11db);
@@ -740,8 +760,11 @@ void setup() {
     Serial.printf("[CHAR] %s (folder %d)\n", gCharName, gCharFolder);
 
     // Servo
-    if (ledcAttach(PIN_SERVO, SERVO_FREQ_HZ, SERVO_RES_BITS)) {
-        // Kurzer Selbsttest: links → rechts → Mitte
+    bool servoOk = ledcAttach(PIN_SERVO, SERVO_FREQ_HZ, SERVO_RES_BITS);
+    if (servoOk && warm) {
+        servoWriteUs(SERVO_MID_US);
+    } else if (servoOk) {
+        // Kurzer Selbsttest: links → rechts → Mitte (nur Kaltstart)
         servoWriteUs(SERVO_MIN_US);
         delay(400);
         servoWriteUs(SERVO_MAX_US);
@@ -758,34 +781,47 @@ void setup() {
     ledcAttach(PIN_RPWM, 10000, 8);
     ledcAttach(PIN_LPWM, 10000, 8);
     motorSet(0);
-    // Beleuchtung — beim Motortest 1s an als Lichttest
-    pinMode(PIN_LIGHT_MAIN, OUTPUT); digitalWrite(PIN_LIGHT_MAIN, HIGH);
-    pinMode(PIN_LIGHT_REV, OUTPUT);  digitalWrite(PIN_LIGHT_REV, HIGH);
-
-    // Kurzer Selbsttest: sanft vor → zurück → aus
-    motorSet(25);
-    delay(400);
-    motorSet(-25);
-    delay(400);
-    motorSet(0);
-    Serial.println("[MOTOR] ok");
-    delay(200);
-    digitalWrite(PIN_LIGHT_MAIN, LOW);
-    digitalWrite(PIN_LIGHT_REV, LOW);
+    pinMode(PIN_LIGHT_MAIN, OUTPUT); digitalWrite(PIN_LIGHT_MAIN, LOW);
+    pinMode(PIN_LIGHT_REV, OUTPUT);  digitalWrite(PIN_LIGHT_REV, LOW);
+    if (!warm) {
+        // Selbsttest nur beim Kaltstart: Licht an, sanft vor → zurück → aus
+        digitalWrite(PIN_LIGHT_MAIN, HIGH);
+        digitalWrite(PIN_LIGHT_REV, HIGH);
+        motorSet(25);
+        delay(400);
+        motorSet(-25);
+        delay(400);
+        motorSet(0);
+        Serial.println("[MOTOR] ok");
+        delay(200);
+        digitalWrite(PIN_LIGHT_MAIN, LOW);
+        digitalWrite(PIN_LIGHT_REV, LOW);
+    }
 
     // IR LED
     pinMode(PIN_IR, OUTPUT);
     digitalWrite(PIN_IR, LOW);
 
     // IMU
+#ifdef MK_TEST_NO_I2C
+    // Testbuild (env car_noi2c): kein I2C-Verkehr, IMU bleibt aus (gImuOk=false).
+    Serial.println("[TEST] I2C deaktiviert (MK_TEST_NO_I2C)");
+#else
     imuInit();
+#endif
 
     // EEPROM
     eepromLoad();
     Serial.printf("[EEPROM] ch=%d trim=%d\n", gChannel, gTrim);
 
-    // DFPlayer
-    if (gDf.begin(gDfSerial, false)) {
+    // DFPlayer — Warmstart: nicht zurücksetzen (spart bis zu 2.2 s Warten),
+    // keine Diagnose, kein Intro-Sound mitten im Rennen.
+    if (warm) {
+        gDf.begin(gDfSerial, false, false);
+        gDfOk = true;
+        gDf.volume(20);
+        Serial.println("[DF] Warmstart, ohne Reset");
+    } else if (gDf.begin(gDfSerial, false)) {
         gDfOk = true;
         Serial.println("[DF] ok");  // ohne ACK liefert begin() immer true — sagt nichts
         if (DF_DIAG) dfDiag();
@@ -841,14 +877,25 @@ void setup() {
 
     gLeds.fill(gLeds.Color(80, 40, 0));  // orange = searching
     gLeds.show();
+
+    mkWatchdogBegin();     // Loop-WDT 50 ms + RTC-WDT 1 s, siehe mk_watchdog.h
 }
 
 // ── Loop ──────────────────────────────────────────────────────────────────────
 void loop() {
+    mkDiagTick();
+    mkWatchdogFeed();
     uint32_t now = nowMs();
 
     // ── Aktuatoren (immer aus Main-Loop, nie aus Callback) ───────────────────
+#ifdef MK_TEST_NO_DRIVE
+    // Testbuild (env car_nodrive): Verbindung und alle Pakete laufen normal,
+    // aber Motor und Servo bleiben aus — fuer Langzeittests der FB mit
+    // abgezogenen Sticks, die sonst Zufallswerte als Fahrbefehle schicken.
+    if (true) {
+#else
     if (gBatCutoff || !gPaired || msSinceLastPacket() > CONTROL_TIMEOUT_MS) {
+#endif
         motorSet(0);
         servoSet(0);
         digitalWrite(PIN_LIGHT_REV, LOW);
@@ -888,6 +935,7 @@ void loop() {
             // treffen erfahrungsgemäß nah an der 5s-Marke ein). Kurz warten und
             // erneut prüfen, bevor EEPROM unwiderruflich gelöscht wird — sonst
             // sabotiert der Timeout ein Pairing, das im selben Moment fertig wird.
+            MkWdtPause wdtPause;
             delay(100);
             if (!gPaired) {
                 Serial.println("[PAIR] Timeout – reset auf Kanal 1");

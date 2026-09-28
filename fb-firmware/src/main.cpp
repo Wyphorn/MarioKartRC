@@ -12,6 +12,7 @@
 #include <driver/gpio.h>
 #include "mk_protocol.h"
 #include "mk_clock_guard.h"
+#include "mk_watchdog.h"
 
 // --- Pins (ESP32-C6-SuperMini, Repin 2026-09-06) ---
 // Tabu: GPIO12/13 (USB D-/D+), GPIO8/9 (RGB-LED / BOOT-Strap),
@@ -139,7 +140,15 @@
 // floatet der Pin und liefert Mist (~1.2V → 0%). Das wuerde die LED rot blinken
 // lassen und den Rumble abschalten. Analog zu gBatWired in der Auto-Firmware.
 // Auf true setzen, sobald der Teiler dran ist. Verdrahtet seit 2026-09-25.
+#if defined(MK_TEST_BARE) || defined(MK_TEST_USB_POWER)
+// Testbuilds: fb_bare (nacktes C6, GPIO0 haengt in der Luft) und fb_usbpower
+// (Platine ohne Akku, Versorgung per USB — ueber den LDO rueckgespeist liegt
+// das Akku-Netz bei ~2.7V). In beiden Faellen wuerde der Tiefentladeschutz
+// sonst auf falsche Werte reagieren.
+#define BAT_WIRED  false
+#else
 #define BAT_WIRED  true
+#endif
 // Der C6 hat keinen internen Teiler wie der ESP8266-A0. Extern 100k/100k:
 // 4.2V → 2.1V, sicher unter der 3.3V-Referenz. analogReadMilliVolts() nutzt die
 // werkskalibrierte ADC-Kurve, deshalb kein roher analogRead().
@@ -203,6 +212,7 @@ struct Strings {
     const char* batEmpty;           // Statuszeile ab 0% (3.4V)
     const char* batOffLine1;        // Abschalt-Screen Zeile 1
     const char* batOffLine2;        // Abschalt-Screen Zeile 2
+    const char* stickFault;         // Statuszeile bei I2C-Dauerstoerung
 };
 
 const Strings STRINGS[LANG_COUNT] = {
@@ -239,7 +249,8 @@ const Strings STRINGS[LANG_COUNT] = {
         "Warte auf Auto", "Verbinde mit Basis",
         "Verbinde mit", "letztem Spiel",
         "Akku leer!",
-        "Akku leer", "Bitte ausschalten"
+        "Akku leer", "Bitte ausschalten",
+        "Sticks gestoert!"
     },
     // LANG_EN
     {
@@ -274,7 +285,8 @@ const Strings STRINGS[LANG_COUNT] = {
         "Waiting for car", "Connecting to base",
         "Reconnecting", "to last game",
         "Battery empty!",
-        "Battery empty", "Please switch off"
+        "Battery empty", "Please switch off",
+        "Stick fault!"
     }
 };
 
@@ -301,6 +313,67 @@ Adafruit_ST7789   display(PIN_TFT_CS, PIN_TFT_DC, -1);  // RST fest auf 3.3V
 Adafruit_NeoPixel led(1, PIN_LED, NEO_GRB + NEO_KHZ800);
 
 bool    adsOK   = false;
+
+// ── I2C-Ueberwachung ADS1115 ──────────────────
+// Am 2026-09-26 fiel der Bus zum ADS1115 in eine Dauerstoerung
+// (ESP_ERR_INVALID_STATE bei jedem Zugriff) — die FB las Muell und schickte ihn
+// als Lenkung ans Auto. Deshalb: vor und nach jedem Lesen pruefen, ob der ADS
+// antwortet; sonst neutral senden, nach kurzer Stoerung den Bus neu aufsetzen
+// und jede Stoerung ins Log schreiben.
+#define I2C_REINIT_AFTER_CYCLES  10     // ~200 ms Stoerung, dann Bus neu
+#define I2C_REINIT_GAP_MS       500     // Mindestabstand zwischen Neuinits
+#define I2C_FAULT_AFTER_REINITS   3     // danach Hinweis auf dem Display
+bool stickFault = false;                // Dauerstoerung, Anzeige in der Statuszeile
+
+bool adsAlive() {
+    Wire.beginTransmission(0x48);
+    return Wire.endTransmission() == 0;
+}
+
+void handleI2cHealth(bool ok) {
+    static uint32_t failCycles = 0, failStartMs = 0, incidents = 0, reinits = 0;
+    static uint32_t lastReinitMs = 0;
+    if (ok) {
+        if (failCycles) {
+            Serial.printf("[I2C] wieder ok nach %lu ms (%lu Runden, %lu Neuinit.)\n",
+                          (unsigned long)(nowMs() - failStartMs),
+                          (unsigned long)failCycles, (unsigned long)reinits);
+        }
+        failCycles = 0;
+        reinits    = 0;
+        stickFault = false;
+        return;
+    }
+    if (failCycles++ == 0) {
+        gDiag.i2c++;
+        failStartMs = nowMs();
+        incidents++;
+        Serial.printf("[I2C] ADS1115 antwortet nicht – sende neutral (Stoerung #%lu)\n",
+                      (unsigned long)incidents);
+    }
+    if (failCycles >= I2C_REINIT_AFTER_CYCLES && nowMs() - lastReinitMs >= I2C_REINIT_GAP_MS) {
+        lastReinitMs = nowMs();
+        // Bus-Freiraeumen im I2C-Treiber (s_i2c_master_clear_bus) kann laenger
+        // als 50 ms dauern — gewollter Rettungsschritt, nicht ueberwachen.
+        MkWdtPause wdtPause;
+        reinits++;
+        gDiag.i2cReinit++;
+        Wire.end();
+        Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+    // Kurzer Timeout: eine ADS-Uebertragung dauert <1 ms. Mit dem Standard von
+    // 50 ms wartete die Loop bei einer I2C-Stoerung so lange, dass der
+    // Loop-Watchdog (50 ms, mk_watchdog.h) ausloeste — FB 2026-09-28.
+    Wire.setTimeOut(5);
+        bool back = ads.begin(0x48);
+        if (back) ads.setDataRate(RATE_ADS1115_860SPS);
+        Serial.printf("[I2C] Bus neu initialisiert (#%lu) – ADS %s\n",
+                      (unsigned long)reinits, back ? "antwortet" : "fehlt");
+        if (reinits >= I2C_FAULT_AFTER_REINITS && !stickFault) {
+            stickFault = true;
+            Serial.println("[I2C] Dauerstoerung – Hinweis auf dem Display");
+        }
+    }
+}
 bool    dispOK  = false;
 uint8_t batPct  = 100;
 float   batVolt = 0.0f;
@@ -393,6 +466,14 @@ static void    getMac(uint8_t* out);
 // LED
 // ──────────────────────────────────────────────
 void setLed(uint8_t r, uint8_t g, uint8_t b) {
+#ifdef MK_TEST_NO_LED
+    // Testbuild: WS2812B bleibt dunkel — prueft, ob ihre PWM-Stromimpulse auf
+    // der 3.3V-Schiene die C6-Fehler ausloesen. Einmal aus, danach keine Daten.
+    static bool done = false;
+    if (done) return;
+    done = true;
+    r = g = b = 0;
+#endif
     led.setPixelColor(0, led.Color(r, g, b));
     led.show();
 }
@@ -425,6 +506,7 @@ void saveSettings() {
     EEPROM.put(EEPROM_ADDR_MIN,    jsMin);
     EEPROM.put(EEPROM_ADDR_MAX,    jsMax);
     EEPROM.put(EEPROM_ADDR_LANG,   langIndex);
+    MkWdtPause wdtPause;   // Flash schreiben kann bis ~400 ms dauern
     EEPROM.commit();
 }
 
@@ -449,12 +531,16 @@ bool loadSettings() {
 // ──────────────────────────────────────────────
 void calibrateOffset() {
     if (!adsOK) return;
+    MkWdtPause wdtPause;   // ~300 ms Mittelung plus EEPROM
+    if (!adsAlive()) { Serial.println("[CAL-OFF] ADS antwortet nicht – abgebrochen"); return; }
     int32_t sum[4] = {};
     for (int i = 0; i < 10; i++) {
         for (int ch = 0; ch < 4; ch++)
             sum[ch] += ads.readADC_SingleEnded(ch);
         delay(20);
     }
+    // Mit gestoertem Bus gelesene Werte nicht als Nullpunkt speichern
+    if (!adsAlive()) { Serial.println("[CAL-OFF] ADS antwortet nicht – abgebrochen"); return; }
     for (int ch = 0; ch < 4; ch++)
         jsCenter[ch] = sum[ch] / 10;
     saveSettings();
@@ -469,13 +555,14 @@ void dispClear();
 void dispCentered(const char* text, int y, uint8_t size, uint16_t col);
 
 void fbShutdown() {
+    mkWatchdogStop();   // 5 s Meldung, dann Deep Sleep — RTC-WDT darf nicht weiterlaufen
     Serial.printf("[BAT] %.2fV < %.2fV — Abschaltung (Deep Sleep)\n", batVolt, BAT_OFF_V);
     ledcWrite(PIN_RUMBLE, 0);
     setLed(0, 0, 0);
     if (dispOK) {
         dispClear();
-        dispCentered(S().batOffLine1, 58, 2, COL_CRIT);
-        dispCentered(S().batOffLine2, 90, 2, COL_FG);
+        mkWatchdogCheckpoint(); dispCentered(S().batOffLine1, 58, 2, COL_CRIT);
+        mkWatchdogCheckpoint(); dispCentered(S().batOffLine2, 90, 2, COL_FG);
     }
     delay(5000);
     if (dispOK) {
@@ -567,7 +654,9 @@ int16_t mapJS(int16_t raw, int ch) {
 bool normalOnScreen = false;
 
 void dispClear() {
-    display.fillScreen(COL_BG);
+    mkWatchdogCheckpoint();
+    display.fillScreen(COL_BG);   // ~25 ms bei 40 MHz
+    mkWatchdogCheckpoint();
     normalOnScreen = false;
 }
 
@@ -575,7 +664,7 @@ void dispTitle(const char* title) {
     if (!dispOK) return;
     display.setTextSize(2);
     display.setTextColor(COL_ACCENT);
-    display.setCursor(6, TITLE_Y);
+    mkWatchdogCheckpoint(); display.setCursor(6, TITLE_Y);
     display.print(title);
     display.drawFastHLine(0, RULE_Y, TFT_W, COL_DIM);
     display.setTextColor(COL_FG);
@@ -585,7 +674,7 @@ void dispHighlight(int y, const char* text, int h = LINE_H) {
     display.fillRect(0, y, TFT_W, h, COL_ACCENT);
     display.setTextSize(2);
     display.setTextColor(COL_BG);
-    display.setCursor(6, y + (h - CH_H) / 2);
+    mkWatchdogCheckpoint(); display.setCursor(6, y + (h - CH_H) / 2);
     display.print(text);
     display.setTextColor(COL_FG);
 }
@@ -595,7 +684,7 @@ void dispCentered(const char* text, int y, uint8_t size, uint16_t col) {
     display.setTextSize(size);
     display.setTextColor(col);
     int w = (int)strlen(text) * 6 * size;
-    display.setCursor((TFT_W - w) / 2, y);
+    mkWatchdogCheckpoint(); display.setCursor((TFT_W - w) / 2, y);
     display.print(text);
 }
 
@@ -621,7 +710,7 @@ void drawBatteryIcon(uint8_t pct) {
                    (pct > 16) ? 2 : 1;
     uint16_t col = (pct <= BAT_CRIT_PCT) ? COL_CRIT
                  : (pct <= BAT_LOW_PCT)  ? COL_WARN : COL_OK;
-    drawBatteryIconBars(bars, TFT_W - 34, 6, col);
+    mkWatchdogCheckpoint(); drawBatteryIconBars(bars, TFT_W - 34, 6, col);
 }
 
 // ──────────────────────────────────────────────
@@ -636,7 +725,7 @@ void displayNormal(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
     // aktualisieren — Text deckend (Vorder- UND Hintergrundfarbe), damit die
     // alten Zeichen direkt ueberschrieben werden, ohne vorher schwarz zu werden.
     static unsigned long lastDisplayMs = 0;
-    static int16_t c_lx, c_ly, c_rx, c_ry;
+    static uint32_t c_diag[7];
     static bool    c_bY, c_bG, c_bB, c_bR;
     static uint8_t c_batPct, c_carBat;
     static char    c_status[32];
@@ -650,9 +739,9 @@ void displayNormal(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
         normalOnScreen = true;
         display.setTextSize(1);
         display.setTextColor(COL_DIM);
-        display.setCursor(6, 10);
+        mkWatchdogCheckpoint(); display.setCursor(6, 10);
         display.print(fbMode == MODE_DIRECT ? "DIRECT" : "GAME");
-        display.setCursor(TFT_W - 108, 10);
+        mkWatchdogCheckpoint(); display.setCursor(TFT_W - 108, 10);
         display.print("KART");
         display.drawFastHLine(0, RULE_Y, TFT_W, COL_DIM);
     }
@@ -663,20 +752,28 @@ void displayNormal(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
         c_batPct = batPct;
         c_carBat = feedback.carBat;
         display.fillRect(TFT_W - 74, 6, 72, 14, COL_BG);
-        drawBatteryIconBars(feedback.carBat, TFT_W - 74, 6, COL_DIM);
-        drawBatteryIcon(batPct);
+        mkWatchdogCheckpoint(); drawBatteryIconBars(feedback.carBat, TFT_W - 74, 6, COL_DIM);
+        mkWatchdogCheckpoint(); drawBatteryIcon(batPct);
     }
 
     display.setTextSize(2);
     display.setTextColor(COL_FG, COL_BG);
-    if (full || lx != c_lx || ly != c_ly || rx != c_rx || ry != c_ry) {
-        c_lx = lx; c_ly = ly; c_rx = rx; c_ry = ry;
-        display.setCursor(6, BODY_Y);          display.printf("LX:%4d  LY:%4d", lx, ly);
-        display.setCursor(6, BODY_Y + LINE_H); display.printf("RX:%4d  RY:%4d", rx, ry);
+    // Statt der Achswerte vorerst die Ereigniszaehler seit dem Einschalten
+    // (mk_clock_guard.h) — so laesst sich auch ohne USB-Log sehen, was passiert.
+    uint32_t d[7] = { gDiag.upSec / 60, gDiag.clock, gDiag.tick, gDiag.wdt,
+                      gDiag.panic, gDiag.i2c, gDiag.i2cReinit };
+    if (full || memcmp(d, c_diag, sizeof(d)) != 0) {
+        memcpy(c_diag, d, sizeof(d));
+        mkWatchdogCheckpoint(); display.setCursor(6, BODY_Y);
+        display.printf("%3lumin U%-3lu T%-3lu W%-3lu ", (unsigned long)d[0], (unsigned long)d[1],
+                       (unsigned long)d[2], (unsigned long)d[3]);
+        mkWatchdogCheckpoint(); display.setCursor(6, BODY_Y + LINE_H);
+        display.printf("I2C %-4lu Neu %-3lu A%-3lu ", (unsigned long)d[5], (unsigned long)d[6],
+                       (unsigned long)d[4]);
     }
     if (full || bYellow != c_bY || bGreen != c_bG || bBlue != c_bB || bRed != c_bR) {
         c_bY = bYellow; c_bG = bGreen; c_bB = bBlue; c_bR = bRed;
-        display.setCursor(6, BODY_Y + LINE_H * 2);
+        mkWatchdogCheckpoint(); display.setCursor(6, BODY_Y + LINE_H * 2);
         display.printf("Y:%d G:%d B:%d R:%d", bYellow, bGreen, bBlue, bRed);
     }
 
@@ -684,7 +781,10 @@ void displayNormal(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
     // die Zeile loeschen und neu setzen, das passiert selten.
     char status[32];
     uint16_t statusCol;
-    if (BAT_WIRED && batPct == 0) {
+    if (stickFault) {
+        snprintf(status, sizeof(status), "%s", S().stickFault);
+        statusCol = COL_CRIT;
+    } else if (BAT_WIRED && batPct == 0) {
         snprintf(status, sizeof(status), "%s", S().batEmpty);
         statusCol = COL_CRIT;
     } else if (!paired) {
@@ -702,7 +802,7 @@ void displayNormal(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
         strcpy(c_status, status);
         int y = BODY_Y + LINE_H * 3 + 12;
         display.fillRect(0, y, TFT_W, CH_H, COL_BG);
-        dispCentered(status, y, 2, statusCol);
+        mkWatchdogCheckpoint(); dispCentered(status, y, 2, statusCol);
     }
     display.setTextColor(COL_FG);
 }
@@ -731,22 +831,22 @@ void displayConnecting() {
 
     dispClear();
     if (rejoin) {
-        dispCentered(S().rejoiningLine1, 58, 2, COL_FG);
-        dispCentered(S().rejoiningLine2, 84, 2, COL_FG);
+        mkWatchdogCheckpoint(); dispCentered(S().rejoiningLine1, 58, 2, COL_FG);
+        mkWatchdogCheckpoint(); dispCentered(S().rejoiningLine2, 84, 2, COL_FG);
     } else {
         const char* msg = (fbMode == MODE_DIRECT) ? S().connectingDirect : S().connectingGame;
-        dispCentered(msg, 72, 2, COL_FG);
+        mkWatchdogCheckpoint(); dispCentered(msg, 72, 2, COL_FG);
     }
-    drawBatteryIcon(batPct);
+    mkWatchdogCheckpoint(); drawBatteryIcon(batPct);
 }
 
 void displayMapping(int8_t slot) {
     if (!dispOK) return;
     dispClear();
-    dispCentered("Mapping", 34, 2, COL_DIM);
+    mkWatchdogCheckpoint(); dispCentered("Mapping", 34, 2, COL_DIM);
     char buf[4];
     snprintf(buf, sizeof(buf), "%d", slot);
-    dispCentered(buf, 74, 6, COL_ACCENT);
+    mkWatchdogCheckpoint(); dispCentered(buf, 74, 6, COL_ACCENT);
 }
 
 // ──────────────────────────────────────────────
@@ -783,7 +883,7 @@ void displayMenu() {
         } else {
             display.setTextSize(2);
             display.setTextColor(COL_FG);
-            display.setCursor(6, y + (LINE_H - CH_H) / 2);
+            mkWatchdogCheckpoint(); display.setCursor(6, y + (LINE_H - CH_H) / 2);
             display.print(itemText);
         }
     }
@@ -803,13 +903,13 @@ void displayOffsetRelease() {
     if (!dispOK) return;
     dispClear();
     dispTitle(S().calOffTitle);
-    dispCentered(S().calOffRelease, 88, 2, COL_FG);
+    mkWatchdogCheckpoint(); dispCentered(S().calOffRelease, 88, 2, COL_FG);
 }
 void displayOffsetDoing() {
     if (!dispOK) return;
     dispClear();
     dispTitle(S().calOffTitle);
-    dispCentered(S().calOffDoing, 88, 2, COL_ACCENT);
+    mkWatchdogCheckpoint(); dispCentered(S().calOffDoing, 88, 2, COL_ACCENT);
 }
 
 // ──────────────────────────────────────────────
@@ -819,13 +919,13 @@ void displayMinMaxStep(uint8_t step) {
     if (!dispOK) return;
     dispClear();
     dispTitle(S().calMMTitle);
-    dispCentered(S().calMMSteps[step].line1, 48, 2, COL_FG);
-    dispCentered(S().calMMSteps[step].line2, 74, 2, COL_FG);
+    mkWatchdogCheckpoint(); dispCentered(S().calMMSteps[step].line1, 48, 2, COL_FG);
+    mkWatchdogCheckpoint(); dispCentered(S().calMMSteps[step].line2, 74, 2, COL_FG);
 
     char buf[24];
     snprintf(buf, sizeof(buf), "%s %d/8", S().calMMStep, step + 1);
-    dispCentered(buf, 110, 2, COL_DIM);
-    dispCentered(S().calMMConfirm, 140, 2, COL_ACCENT);
+    mkWatchdogCheckpoint(); dispCentered(buf, 110, 2, COL_DIM);
+    mkWatchdogCheckpoint(); dispCentered(S().calMMConfirm, 140, 2, COL_ACCENT);
 }
 
 // ──────────────────────────────────────────────
@@ -853,7 +953,7 @@ void displayTrimBar(int8_t trim) {
 
     char buf[8];
     snprintf(buf, sizeof(buf), "%+d", trim);
-    dispCentered(buf, 112, 3, COL_FG);
+    mkWatchdogCheckpoint(); dispCentered(buf, 112, 3, COL_FG);
 }
 
 // ──────────────────────────────────────────────
@@ -875,7 +975,7 @@ void displaySpeedBar(uint8_t speed) {
 
     char buf[8];
     snprintf(buf, sizeof(buf), "%d%%", speed * 10);
-    dispCentered(buf, 112, 3, COL_FG);
+    mkWatchdogCheckpoint(); dispCentered(buf, 112, 3, COL_FG);
 }
 
 // ──────────────────────────────────────────────
@@ -888,14 +988,14 @@ void displayResetCountdown(int secs) {
     static int c_last = -1;
     if (c_last < 0 || secs > c_last) {
         dispClear();
-        dispCentered("Reset in", 30, 2, COL_FG);
+        mkWatchdogCheckpoint(); dispCentered("Reset in", 30, 2, COL_FG);
     } else {
         display.fillRect(0, 74, TFT_W, 48, COL_BG);
     }
     c_last = secs;
     char buf[8];
     snprintf(buf, sizeof(buf), "%ds", secs);
-    dispCentered(buf, 74, 6, COL_CRIT);
+    mkWatchdogCheckpoint(); dispCentered(buf, 74, 6, COL_CRIT);
 }
 
 // ──────────────────────────────────────────────
@@ -905,7 +1005,7 @@ void displayReset() {
     if (!dispOK) return;
     dispClear();
     dispTitle(S().resetTitle);
-    dispCentered(S().resetDone, 88, 2, COL_FG);
+    mkWatchdogCheckpoint(); dispCentered(S().resetDone, 88, 2, COL_FG);
 }
 
 // ──────────────────────────────────────────────
@@ -922,7 +1022,7 @@ void displayLanguage(uint8_t sel) {
         } else {
             display.setTextSize(2);
             display.setTextColor(COL_FG);
-            display.setCursor(6, y + (LINE_H - CH_H) / 2);
+            mkWatchdogCheckpoint(); display.setCursor(6, y + (LINE_H - CH_H) / 2);
             display.print(S().langNames[i]);
         }
     }
@@ -973,16 +1073,16 @@ void displayDebug(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
 
     display.setTextSize(2);
     display.setTextColor(COL_FG, COL_BG);
-    display.setCursor(6, BODY_Y);              display.printf("LX:%4d  LY:%4d ", lx, ly);
-    display.setCursor(6, BODY_Y + LINE_H);     display.printf("RX:%4d  RY:%4d ", rx, ry);
-    display.setCursor(6, BODY_Y + LINE_H * 2); display.printf("Y:%d G:%d B:%d R:%d ", bY, bG, bB, bR);
-    display.setCursor(6, BODY_Y + LINE_H * 3); display.printf("%.2fV %3d%% %s Ch:%-2d ",
+    mkWatchdogCheckpoint(); display.setCursor(6, BODY_Y);              display.printf("LX:%4d  LY:%4d ", lx, ly);
+    mkWatchdogCheckpoint(); display.setCursor(6, BODY_Y + LINE_H);     display.printf("RX:%4d  RY:%4d ", rx, ry);
+    mkWatchdogCheckpoint(); display.setCursor(6, BODY_Y + LINE_H * 2); display.printf("Y:%d G:%d B:%d R:%d ", bY, bG, bB, bR);
+    mkWatchdogCheckpoint(); display.setCursor(6, BODY_Y + LINE_H * 3); display.printf("%.2fV %3d%% %s Ch:%-2d ",
         batVolt, batPct,
         fbMode == MODE_DIRECT ? "D" : "G",
         (int)getChannel());
     uint8_t curMac[6];
     getMac(curMac);
-    display.setCursor(6, BODY_Y + LINE_H * 4);
+    mkWatchdogCheckpoint(); display.setCursor(6, BODY_Y + LINE_H * 4);
     display.printf("%02X:%02X:%02X:%02X:%02X:%02X",
         curMac[0], curMac[1], curMac[2], curMac[3], curMac[4], curMac[5]);
     display.setTextColor(COL_FG);
@@ -1229,7 +1329,7 @@ static void enterSearchState() {
     uint8_t noMac[6] = {};
     EEPROM.put(EEPROM_ADDR_CHANNEL, zero);
     EEPROM.put(EEPROM_ADDR_CARMAC, noMac);
-    EEPROM.commit();
+    { MkWdtPause wdtPause; EEPROM.commit(); }
     reconnecting = false;
 
     if (fbMode == MODE_DIRECT) {
@@ -1278,6 +1378,8 @@ void onDataRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
     }
 }
 
+void onEspNowSent(const esp_now_send_info_t*, esp_now_send_status_t);
+
 void initEspNow() {
     WiFi.mode(WIFI_STA);
     // Kein Modem-Sleep: mit dem SYSTIMER-Fehler (mk_clock_guard.h) kann der
@@ -1304,6 +1406,7 @@ void initEspNow() {
         setChannel(savedCh);
         if (esp_now_init() != ESP_OK) { Serial.println("[ESPNOW] Init fehlgeschlagen"); return; }
         esp_now_register_recv_cb(onDataRecv);
+        esp_now_register_send_cb(onEspNowSent);
         memcpy(peerMac, carMac, 6);
         addPeer(peerMac);
         paired         = true;
@@ -1331,11 +1434,24 @@ void initEspNow() {
     }
     if (esp_now_init() != ESP_OK) { Serial.println("[ESPNOW] Init fehlgeschlagen"); return; }
     esp_now_register_recv_cb(onDataRecv);
+    esp_now_register_send_cb(onEspNowSent);
     if (fbMode == MODE_GAME) {
         uint8_t baseMac[] = MK_BASE_MAC;
         addPeer(baseMac);
     }
     Serial.printf("[ESPNOW] Init OK, Kanal %d\n", MK_ESPNOW_CHANNEL);
+}
+
+// Senden und auf die Quittung des Funk-Stacks warten (hoechstens 10 ms).
+// Ersetzt feste delay()-Pausen im Pairing.
+volatile bool espNowSentFlag = false;
+void onEspNowSent(const esp_now_send_info_t*, esp_now_send_status_t) { espNowSentFlag = true; }
+
+void espNowSendWait(const uint8_t* mac, const uint8_t* data, size_t len) {
+    espNowSentFlag = false;
+    esp_now_send(mac, data, len);
+    uint32_t t0 = nowMs();
+    while (!espNowSentFlag && nowMs() - t0 < 10) delay(1);
 }
 
 void handlePairing() {
@@ -1344,6 +1460,7 @@ void handlePairing() {
         uint8_t noMac[6] = {};
         EEPROM.put(EEPROM_ADDR_CHANNEL, zero);
         EEPROM.put(EEPROM_ADDR_CARMAC, noMac);
+        mkWatchdogStop();   // Neustart folgt ohnehin
         EEPROM.commit();
         Serial.printf("[ESPNOW] %lus kein Feedback vom Auto → Reboot auf Kanal 1\n",
                       reconnectLimit / 1000);
@@ -1352,38 +1469,37 @@ void handlePairing() {
     if (trySavedChannel && !paired && nowMs() - savedChannelStart > SAVED_CHANNEL_TIMEOUT_MS) {
         uint8_t zero = 0;
         EEPROM.put(EEPROM_ADDR_CHANNEL, zero);
+        mkWatchdogStop();   // Neustart folgt ohnehin
         EEPROM.commit();
         Serial.println("[ESPNOW] Kein Pairing auf gespeichertem Kanal → Reboot");
         ESP.restart();
     }
     if (paired) return;
     if (fbMode == MODE_DIRECT && pairingBeaconRx) {
+        MkWdtPause wdtPause;   // Pairing inkl. EEPROM, nur beim Verbinden
         pairingBeaconRx = false;
         memcpy(peerMac, pairingCarMac, 6);
         addPeer(peerMac);
-        // MAC-Wechsel gespoofte Basis-MAC → echte MAC. Der WLAN-Stack
-        // initialisiert dabei intern neu; ein unmittelbar danach gesendetes
-        // Paket ging auf dem ESP8266 regelmaessig verloren (Bug 2026-09-03: das
-        // Auto bekam nur den ChannelSwitch, lief ungepairt in den 5s-Timeout,
-        // loeschte EEPROM und startete neu — waehrend die FB sich fuer
-        // verbunden hielt). Deshalb absetzen lassen und doppelt senden; das
-        // Auto verwirft ein zweites Assign bei bestehendem Pairing ohnehin.
+        // MAC-Wechsel gespoofte Basis-MAC → echte MAC. Auf dem ESP8266 ging das
+        // erste Paket danach regelmaessig verloren (Bug 2026-09-03), dort
+        // brauchte es 50 ms. Beim C6 genuegt eine kurze Pause; das Assign geht
+        // trotzdem doppelt raus, und das Auto holt ein verlorenes Assign ueber
+        // den ChannelSwitch nach. Statt fester Wartezeiten wird auf die
+        // Sende-Quittung gewartet (zusammen ~20-30 ms statt ~110 ms).
         setMac(realMac);
-        delay(50);
+        delay(10);
         MK_Assign assign;
         assign.slot = 1;
         memcpy(assign.baseMac, realMac, 6);
-        esp_now_send(peerMac, (uint8_t*)&assign, sizeof(assign));
-        delay(20);
-        esp_now_send(peerMac, (uint8_t*)&assign, sizeof(assign));
+        espNowSendWait(peerMac, (uint8_t*)&assign, sizeof(assign));
+        espNowSendWait(peerMac, (uint8_t*)&assign, sizeof(assign));
         // Zufälligen Betriebskanal wählen und Auto zum Wechsel auffordern
         const uint8_t channels[] = MK_DIRECT_CHANNELS;
         uint8_t ch = channels[random(MK_DIRECT_CHAN_COUNT)];
         MK_ChannelSwitch chSwitch;
         chSwitch.channel = ch;
-        delay(20);  // kurz warten damit Auto MK_Assign verarbeiten kann
-        esp_now_send(peerMac, (uint8_t*)&chSwitch, sizeof(chSwitch));
-        delay(20);  // kurz warten damit Auto MK_ChannelSwitch verarbeiten kann
+        // Muss noch auf dem alten Kanal raus sein, bevor wir selbst wechseln
+        espNowSendWait(peerMac, (uint8_t*)&chSwitch, sizeof(chSwitch));
         setChannel(ch);
         EEPROM.put(EEPROM_ADDR_CHANNEL, ch);
         EEPROM.put(EEPROM_ADDR_CARMAC, peerMac);
@@ -1481,6 +1597,15 @@ void handleRumbleFb() {
     ledcWrite(PIN_RUMBLE, (nowMs() < rumbleFbEnd) ? RUMBLE_PWM : 0);
 }
 
+// Warmstart = Reset ohne Stromunterbrechung (Watchdog, Absturz, ESP.restart(),
+// USB). Tritt beim ESP32-C6 rev v0.2 auch mitten im Rennen auf (Interrupt-WDT,
+// siehe mk_clock_guard.h) — dann zählt jede Sekunde bis zur Fahrbereitschaft.
+// Nur echtes Einschalten, Brownout oder Unbekannt gelten als Kaltstart.
+static bool isWarmBoot() {
+    esp_reset_reason_t r = esp_reset_reason();
+    return !(r == ESP_RST_POWERON || r == ESP_RST_BROWNOUT || r == ESP_RST_UNKNOWN);
+}
+
 // ──────────────────────────────────────────────
 // Setup
 // ──────────────────────────────────────────────
@@ -1492,12 +1617,15 @@ void setup() {
     // Mit 0 wird bei vollem Puffer einfach verworfen statt gewartet.
     Serial.setTxTimeoutMs(0);
     mkClockGuardBegin();   // SYSTIMER-Fehler des C6 rev v0.2, siehe mk_clock_guard.h
+    mkTickWatchBegin();    // Neustart, wenn der FreeRTOS-Tick stehen bleibt
     // Von fbShutdown() festgehaltene Pins freigeben (falls ein Reset ohne
     // Stromunterbrechung kam, z.B. ueber USB).
     gpio_hold_dis((gpio_num_t)PIN_TFT_BL);
     gpio_hold_dis((gpio_num_t)PIN_RUMBLE);
     gpio_hold_dis((gpio_num_t)PIN_LED);
-    Serial.printf("[RESET] reason=%d\n", (int)esp_reset_reason());
+    const bool warm = isWarmBoot();
+    Serial.printf("[RESET] reason=%d (%s)\n", (int)esp_reset_reason(),
+                  warm ? "Warmstart" : "Kaltstart");
     pinMode(PIN_BTN_YELLOW, INPUT_PULLUP);
     pinMode(PIN_BTN_GREEN,  INPUT_PULLUP);
     pinMode(PIN_BTN_BLUE,   INPUT_PULLUP);
@@ -1507,18 +1635,39 @@ void setup() {
     pinMode(PIN_BTN_STICK_R, INPUT_PULLUP);
     ledcAttach(PIN_RUMBLE, RUMBLE_PWM_FREQ, RUMBLE_PWM_RES);
     ledcWrite(PIN_RUMBLE, 0);
+#ifndef MK_TEST_NO_I2C
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+    // Kurzer Timeout: eine ADS-Uebertragung dauert <1 ms. Mit dem Standard von
+    // 50 ms wartete die Loop bei einer I2C-Stoerung so lange, dass der
+    // Loop-Watchdog (50 ms, mk_watchdog.h) ausloeste — FB 2026-09-28.
+    Wire.setTimeOut(5);
+#endif
     EEPROM.begin(EEPROM_SIZE);
     led.begin();
     led.setBrightness(80);
     setLed(0, 0, 0);
     pinMode(PIN_MODE, INPUT);
+#ifdef MK_TEST_BARE
+    fbMode = MODE_DIRECT;   // ohne Platine haengt der Modus-Pin in der Luft
+    Serial.println("[TEST] Nacktes C6 ohne Platine (MK_TEST_BARE), Direct fest");
+#else
     fbMode = digitalRead(PIN_MODE) ? MODE_DIRECT : MODE_GAME;
+#endif
+#ifdef MK_TEST_USB_POWER
+    Serial.println("[TEST] Platine per USB versorgt, Akku-Messung aus (MK_TEST_USB_POWER)");
+#endif
     Serial.printf("[MODE] %s\n", fbMode == MODE_DIRECT ? "Direct" : "Game");
-    // I2C-Scan beim Boot — zeigt sofort, ob nichts am Bus haengt (Verdrahtung,
+    // I2C-Scan beim Boot (nur Kaltstart — beim Warmstart zaehlt jede ms) — zeigt sofort, ob nichts am Bus haengt (Verdrahtung,
     // Versorgung, Pull-ups) oder ob ein Geraet nur auf einer anderen Adresse
     // sitzt (ADS1115: ADDR→GND 0x48, →VDD 0x49, →SDA 0x4A, →SCL 0x4B).
-    {
+#ifdef MK_TEST_NO_I2C
+    // Testbuild (env fb_noi2c): kein I2C-Verkehr, um zu pruefen, ob der
+    // SYSTIMER-Fehler des C6 ohne I2C ausbleibt. Sticks liefern dann nichts,
+    // die FB sendet neutrale Werte (Sicherheitsgurt !adsOK).
+    Serial.println("[TEST] I2C deaktiviert (MK_TEST_NO_I2C)");
+    adsOK = false;
+#else
+    if (!warm) {
         int found = 0;
         Serial.print("[I2C] Scan:");
         for (uint8_t a = 1; a < 127; a++) {
@@ -1531,6 +1680,7 @@ void setup() {
 
     adsOK  = ads.begin(0x48);
     if (adsOK) ads.setDataRate(RATE_ADS1115_860SPS);
+#endif
     // ST7789 haengt am Hardware-SPI (FSPI). MISO bleibt frei — das Display
     // liest nicht zurueck, also gibt es keinen Presence-Check wie beim I2C-OLED.
     // Fehlt das Panel, zeichnet die Firmware ins Leere; auf SPI ist das
@@ -1539,7 +1689,15 @@ void setup() {
     digitalWrite(PIN_TFT_BL, LOW);          // Backlight aus bis das Bild steht
     SPI.begin(PIN_TFT_SCK, -1, PIN_TFT_MOSI, PIN_TFT_CS);
     display.init(TFT_PANEL_W, TFT_PANEL_H);
+#ifdef MK_TEST_SPI_10MHZ
+    // Testbuild: Display-SPI mit 10 statt 40 MHz — prueft, ob die schnellen
+    // Flanken auf den (bei abgezogenem Display offen endenden) Leitungen die
+    // SYSTIMER-/I2C-Fehler des C6 beguenstigen.
+    display.setSPISpeed(10000000);
+    Serial.println("[TEST] Display-SPI 10 MHz (MK_TEST_SPI_10MHZ)");
+#else
     display.setSPISpeed(40000000);
+#endif
     display.setRotation(TFT_ROTATION);
     display.fillScreen(COL_BG);
     ledcAttach(PIN_TFT_BL, TFT_BL_FREQ, TFT_BL_RES);
@@ -1548,7 +1706,9 @@ void setup() {
     if (!adsOK)  Serial.println("[FEHLER] ADS1115 nicht gefunden");
     Serial.printf("[TFT] ST7789 %dx%d init, Rotation %d\n", TFT_W, TFT_H, TFT_ROTATION);
     if (!BAT_WIRED) Serial.println("[BAT] Teiler nicht verdrahtet (BAT_WIRED=false) — Akku wird als 100% gemeldet");
-    if (!digitalRead(PIN_BTN_RED)) {
+    // Nur beim Kaltstart: bei einem Warmstart mitten im Rennen koennte gerade
+    // Rot (Licht) gedrueckt sein — das darf nicht die Einstellungen loeschen.
+    if (!warm && !digitalRead(PIN_BTN_RED)) {
         Serial.println("[RESET] Boot-Reset via Red");
         resetSettings();
         displayReset();
@@ -1564,19 +1724,53 @@ void setup() {
     state = STATE_READY;
     initEspNow();
     ledPulseOrange();
+    mkWatchdogBegin();     // Loop-WDT 50 ms + RTC-WDT 1 s, siehe mk_watchdog.h
 }
 
 // ──────────────────────────────────────────────
 // Loop
 // ──────────────────────────────────────────────
+#define BTN_STABLE_ROUNDS 3
+bool debounceButton(uint8_t idx, bool raw) {
+    static bool    stable[4] = {};
+    static uint8_t count[4]  = {};
+    if (raw == stable[idx]) { count[idx] = 0; return stable[idx]; }
+    if (++count[idx] >= BTN_STABLE_ROUNDS) { stable[idx] = raw; count[idx] = 0; }
+    return stable[idx];
+}
+
+// Display-Wiederbelebung: der ST7789 bekam gelegentlich Fehlbefehle (Bild
+// schwarz = SLPIN/DISPOFF, invertiert = INVOFF), vermutlich durch abgebrochene
+// Uebertragungen oder Stoerungen auf DC/CS. Alle 2 s die Grundeinstellungen
+// erneut senden — ein paar Bytes, unsichtbar, heilt genau diese Faelle.
+// Ist der Bildspeicher selbst verloren, hilft erst das naechste Neuzeichnen.
+#define DISPLAY_REVIVE_MS 2000
+void reviveDisplay() {
+    static uint32_t last = 0;
+    if (!dispOK || nowMs() - last < DISPLAY_REVIVE_MS) return;
+    last = nowMs();
+    static const uint8_t colmod = 0x55;          // 16 bit/Pixel
+    display.sendCommand(0x11);                   // SLPOUT
+    display.sendCommand(0x13);                   // NORON
+    display.sendCommand(0x21);                   // INVON (dieses Panel braucht es)
+    display.sendCommand(0x3A, &colmod, 1);       // COLMOD
+    display.setRotation(TFT_ROTATION);           // MADCTL + Fenster-Offsets
+    display.sendCommand(0x29);                   // DISPON
+}
+
 void loop() {
+    mkDiagTick();
+    mkWatchdogFeed();
     static unsigned long lastLoopMs = 0;
     static bool prevYellow = false, prevGreen = false, prevBlue = false, prevRed = false;
 
-    bool bYellow = !digitalRead(PIN_BTN_YELLOW);
-    bool bGreen  = !digitalRead(PIN_BTN_GREEN);
-    bool bBlue   = !digitalRead(PIN_BTN_BLUE);
-    bool bRed    = !digitalRead(PIN_BTN_RED);
+    // Entprellt: ein Zustand gilt erst nach BTN_STABLE_ROUNDS gleichen
+    // Lesungen in Folge (3 × 20 ms). Einzelne Stoerspitzen — am Auto ging
+    // 2026-09-26 "zufaellig" das Licht an — fallen damit raus.
+    bool bYellow = debounceButton(0, !digitalRead(PIN_BTN_YELLOW));
+    bool bGreen  = debounceButton(1, !digitalRead(PIN_BTN_GREEN));
+    bool bBlue   = debounceButton(2, !digitalRead(PIN_BTN_BLUE));
+    bool bRed    = debounceButton(3, !digitalRead(PIN_BTN_RED));
 
     bool bYellowP = bYellow && !prevYellow;
     bool bGreenP  = bGreen  && !prevGreen;
@@ -1589,8 +1783,13 @@ void loop() {
 
     // Letzter bekannter Wert bleibt erhalten wenn ein Kanal gerade nicht gelesen wird
     static int16_t rawLX = 0, rawLY = 0, rawRX = 0, rawRY = 0;
+    // false = ADS1115 hat in dieser Runde nicht sauber geantwortet → neutral
+    bool i2cCycleOk = true;
     if (adsOK) {
-        if (state == STATE_READY) {
+        int16_t nLX = rawLX, nLY = rawLY, nRX = rawRX, nRY = rawRY;
+        if (!adsAlive()) {
+            i2cCycleOk = false;   // gar nicht erst lesen, Muell ist sicher
+        } else if (state == STATE_READY) {
             // Nur die 2 aktiven Kanäle, dafür mit Oversampling
             uint8_t chA = swapSticks ? JS_RIGHT_Y : JS_LEFT_Y;
             uint8_t chB = swapSticks ? JS_LEFT_X  : JS_RIGHT_X;
@@ -1599,15 +1798,28 @@ void loop() {
                 sumA += ads.readADC_SingleEnded(chA);
                 sumB += ads.readADC_SingleEnded(chB);
             }
-            if (swapSticks) { rawRY = sumA / ADC_OVERSAMPLE; rawLX = sumB / ADC_OVERSAMPLE; }
-            else            { rawLY = sumA / ADC_OVERSAMPLE; rawRX = sumB / ADC_OVERSAMPLE; }
+            if (swapSticks) { nRY = sumA / ADC_OVERSAMPLE; nLX = sumB / ADC_OVERSAMPLE; }
+            else            { nLY = sumA / ADC_OVERSAMPLE; nRX = sumB / ADC_OVERSAMPLE; }
         } else {
             // Menü/Kalibrierung: alle 4 Kanäle für Navigation und Kalibrierung
-            rawLX = ads.readADC_SingleEnded(JS_LEFT_X);
-            rawLY = ads.readADC_SingleEnded(JS_LEFT_Y);
-            rawRX = ads.readADC_SingleEnded(JS_RIGHT_X);
-            rawRY = ads.readADC_SingleEnded(JS_RIGHT_Y);
+            nLX = ads.readADC_SingleEnded(JS_LEFT_X);
+            nLY = ads.readADC_SingleEnded(JS_LEFT_Y);
+            nRX = ads.readADC_SingleEnded(JS_RIGHT_X);
+            nRY = ads.readADC_SingleEnded(JS_RIGHT_Y);
         }
+        // Auch waehrend des Lesens kann der Bus ausfallen — dann gelten die
+        // Werte nicht. Single-ended liefert nie deutlich negative Counts.
+        if (i2cCycleOk && (!adsAlive() || nLX < -200 || nLY < -200 || nRX < -200 || nRY < -200))
+            i2cCycleOk = false;
+        if (i2cCycleOk) {
+            rawLX = nLX; rawLY = nLY; rawRX = nRX; rawRY = nRY;
+        } else {
+            // Sticks auf Mitte: Fahrt, Menue-Navigation und Anzeige neutral
+            rawLX = jsCenter[JS_LEFT_X];  rawLY = jsCenter[JS_LEFT_Y];
+            rawRX = jsCenter[JS_RIGHT_X]; rawRY = jsCenter[JS_RIGHT_Y];
+        }
+        handleI2cHealth(i2cCycleOk);
+        mkWatchdogCheckpoint();
     }
 
     // Red 10s halten im Normalbetrieb → EEPROM-Reset (ab 5s Countdown)
@@ -1649,7 +1861,7 @@ void loop() {
         uint8_t ch = pendingChannelSave;
         pendingChannelSave = 0;
         EEPROM.put(EEPROM_ADDR_CHANNEL, ch);
-        EEPROM.commit();
+        { MkWdtPause wdtPause; EEPROM.commit(); }
         Serial.printf("[ESPNOW] Kanal %d gespeichert\n", ch);
     }
     handlePairing();
@@ -1690,10 +1902,15 @@ void loop() {
         // rechnet gegen jsCenter (9994) → -100/-100, also Vollgas rueckwaerts
         // mit Lenkung voll links. Faellt der ADS im Betrieb aus waehrend die FB
         // gepairt ist, bekaeme das Auto genau das gesendet.
-        if (!adsOK) { throttle = 0; steering = 0; }
+        if (!adsOK || !i2cCycleOk) { throttle = 0; steering = 0; }
 
+#ifdef MK_LOG_INPUTS
+        // Achsen/Buttons jede Loop-Runde (~50 Zeilen/s) — nur zum Debuggen.
+        // Standardmaessig aus: der Dauerverkehr ueber USB-Serial/JTAG steht im
+        // Verdacht, den SYSTIMER-Fehler des C6 (mk_clock_guard.h) zu haeufen.
         Serial.printf("LX:%6d | LY:%6d | RX:%6d | RY:%6d | Y:%d G:%d B:%d R:%d | thr:%4d str:%4d\n",
             rawLX, rawLY, rawRX, rawRY, bYellow, bGreen, bBlue, bRed, throttle, steering);
+#endif
 
         sendControlInput(throttle, steering, bYellow, bGreen, bBlue, bRed);
 
@@ -1729,6 +1946,7 @@ void loop() {
     }
 
     handleRumbleFb();
+    reviveDisplay();
 
     unsigned long elapsed = nowMs() - lastLoopMs;
     if (LOOP_PERIOD_MS > elapsed) delay(LOOP_PERIOD_MS - elapsed);
