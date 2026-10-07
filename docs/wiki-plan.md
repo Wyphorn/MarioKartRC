@@ -10,7 +10,7 @@ Status: ✅ fertig · 🔄 in Arbeit / in Durchsicht · ⏳ offen · ⏸ wartet 
 | 0 | Plan erstellen und vorstellen | ✅ |
 | 1 | Repo vorbereiten (aufräumen, Lizenz, Prüfung vor Veröffentlichung) | ✅ |
 | 2 | Repo öffentlich schalten, Wiki aktivieren, Wiki-Gerüst (Home, Sidebar, Footer) | ✅ |
-| 3 | Bilder aus KiCad exportieren (Schaltpläne, Platinen, 3D-Renderings) | ⏳ |
+| 3 | Bilder aus KiCad exportieren (Schaltpläne, Platinen, 3D-Renderings) | 🔄 Durchsicht |
 | 4 | Seite: Projektüberblick und Systemarchitektur (inkl. Protokoll) | ⏳ |
 | 5 | Seiten: Hardware Fernbedienung | ⏳ |
 | 6 | Seiten: Hardware Kart (Kart-Board + Schalter-Platinchen) | ⏳ |
@@ -83,6 +83,14 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 - CLAUDE.md per `git filter-branch` aus der gesamten Historie entfernt, force-gepusht (30 Commits, neue Hashes).
 - Globale KiCad-Symboltabelle bereinigt (`zzzz_Own`, `RF_Module_Own`, `zz_own` raus; nur noch KiCad-Standard).
 
+## Schritt 3 – Bilder
+
+- Skript `kicad/export_images.sh [board…]` → `docs/images/<board>/`: `schematic.svg/.pdf`, `layer_top/bottom.png`,
+  `3d_top/bottom/iso.jpg`. Boards: `kart`, `controller`, `buttons`, `switch` (aktuell) + `kart_v1`, `controller_v1`
+  (aus Commit `6059d1e`, Rev. 0.9). Nach jeder Platinenänderung neu laufen lassen. Gesamt ~12 MB.
+- Einbinden im Wiki: `https://raw.githubusercontent.com/Wyphorn/MarioKartRC/main/docs/images/<board>/<datei>`
+- Fotos von V1 liefert der User später (Schritt 12).
+
 ## Merkposten für spätere Schritte
 
 - **Startseite** später ggf. kürzen (User-Eindruck: etwas viel Info). Sidebar-Einträge „(folgt)“ beim Anlegen jeder Seite in echte Links umwandeln.
@@ -100,3 +108,4 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 - 2026-10-07: Schritt 1 umgesetzt und mit User durchgesehen, Historie bereinigt, gepusht. Wartet auf GO für Schritt 2.
 - 2026-10-07: Repo öffentlich, Wiki aktiviert, Beschreibung + Topics gesetzt. Gerüst (Home, _Sidebar, _Footer) als Entwurf im Scratchpad; Push sobald User die erste Wiki-Seite angelegt hat.
 - 2026-10-07: Schritt 2 fertig. Wiki-Gerüst gepusht (Home, _Sidebar, _Footer). User: Startseite evtl. zu viel Info, vorerst so lassen. Leser duzen.
+- 2026-10-07: Schritt 3 umgesetzt, Bilder + Skript gepusht, wartet auf Durchsicht.
