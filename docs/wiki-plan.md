@@ -19,7 +19,7 @@ Status: ✅ fertig · 🔄 in Arbeit / in Durchsicht · ⏳ offen · ⏸ wartet 
 | 8 | Seite: Software Fernbedienung | ✅ |
 | 9 | Seite: Software Kart (inkl. OTA, DFPlayer/SD-Karte) | ✅ |
 | 10 | Seite: Strecke, IR-System, Basisstation (Planungsstand) | ✅ |
-| 11 | Seite: Nachbauen (Stückliste, Bestellen, Flashen, Akku-Regeln) | 🔄 Durchsicht |
+| 11 | Seite: Nachbauen (Stückliste, Bestellen, Flashen, Akku-Regeln) | ✅ |
 | 12 | Fotos und Video einbinden | ⏸ User liefert |
 | 13 | README kürzen und aufs Wiki verweisen | ⏳ |
 | 14 | Optional: Blog / „Was letzte Woche geschah“ | ⏳ später |
@@ -135,3 +135,4 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 - 2026-10-07: Schritt 10: Seite „Strecke und IR-System“ online. Geklärt: −8/0/+8 cm = Sender am Auto, Empfänger im 5-cm-Raster (Vernier: max. 1 cm Abstand).
 - 2026-10-07: Schritt 11: Seite „Nachbauen“ online, Stücklisten-CSV unter docs/bom/ (Export im Skript). Offen: Sound-Quelle (User), Stand der Ordner in sounds/ (alt/kanonisch?), 09/003–006 Inhalt; 07=08 identisch, 03/04 nur je 2 verschiedene Dateien.
 - 2026-10-07: Sound-Abschnitt fertig. sounds/ umgebaut (02 Luigi, 03 Yoshi, 04 Bowser, 05 DK), 09/002 = Original wiederhergestellt.
+- 2026-10-07: Schritt 11 abgenommen (Links zu allen Kaufteilen ergänzt).
