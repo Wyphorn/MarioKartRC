@@ -14,7 +14,7 @@ Status: ✅ fertig · 🔄 in Arbeit / in Durchsicht · ⏳ offen · ⏸ wartet 
 | 4 | Seite: Projektüberblick und Systemarchitektur (inkl. Protokoll) | ✅ |
 | 4b | Seite: Spielmodi (Rennen + Items, Hunter, Ideen wie Capture the Flag) | ✅ |
 | 5 | Seiten: Hardware Fernbedienung | ✅ |
-| 6 | Seiten: Hardware Kart (Kart-Board + Schalter-Platinchen) | ⏳ |
+| 6 | Seiten: Hardware Kart (Kart-Board + Schalter-Platinchen) | 🔄 Durchsicht |
 | 7 | Seite: Pannen und Lehren (geflickte Platine, falsche Diode, Durchgeher, …) | ⏳ |
 | 8 | Seite: Software Fernbedienung | ⏳ |
 | 9 | Seite: Software Kart (inkl. OTA, DFPlayer/SD-Karte) | ⏳ |
@@ -120,3 +120,4 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 - 2026-10-07: Neue Seite „Spielmodi“ (User-Wunsch): Items und Hunter aus dem Systemüberblick ausgelagert, Capture the Flag als Idee.
 - 2026-10-07: Schritt 4/4b abgenommen. Schritt 5: Seiten „Fernbedienung“ (V2, mit V1-Problemtabelle) und „Tasterplatine“ online.
 - 2026-10-07: Schritt 5 abgenommen.
+- 2026-10-07: Schritt 6: Seiten „Kart-Board“ (V2, Chassis, Figurenwahl-Tabelle, V1-Problemtabelle) und „Schalter-Platinchen“ online.
