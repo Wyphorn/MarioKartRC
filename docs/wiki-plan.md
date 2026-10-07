@@ -9,7 +9,7 @@ Status: ✅ fertig · 🔄 in Arbeit / in Durchsicht · ⏳ offen · ⏸ wartet 
 |---|---|---|
 | 0 | Plan erstellen und vorstellen | ✅ |
 | 1 | Repo vorbereiten (aufräumen, Lizenz, Prüfung vor Veröffentlichung) | ✅ |
-| 2 | Repo öffentlich schalten, Wiki aktivieren, Wiki-Gerüst (Home, Sidebar, Footer) | 🔄 öffentlich ✅, Wiki an ✅, wartet auf erste Seite (User) |
+| 2 | Repo öffentlich schalten, Wiki aktivieren, Wiki-Gerüst (Home, Sidebar, Footer) | ✅ |
 | 3 | Bilder aus KiCad exportieren (Schaltpläne, Platinen, 3D-Renderings) | ⏳ |
 | 4 | Seite: Projektüberblick und Systemarchitektur (inkl. Protokoll) | ⏳ |
 | 5 | Seiten: Hardware Fernbedienung | ⏳ |
@@ -31,7 +31,8 @@ Status: ✅ fertig · 🔄 in Arbeit / in Durchsicht · ⏳ offen · ⏸ wartet 
 - **Bilder** liegen im Hauptrepo unter `docs/images/` und werden im Wiki per
   `https://raw.githubusercontent.com/Wyphorn/MarioKartRC/main/docs/images/...` eingebunden —
   so sind sie versioniert, und das Wiki-Repo bleibt klein.
-- **Sprache:** Deutsch. (Englisch ggf. später.)
+- **Sprache:** Deutsch. (Englisch ggf. später.) **Leser duzen**, Autor schreibt in Ich-Form.
+- **Wiki lokal:** `~/Dokumente/MarioKartRC.wiki/` (eigenes Git-Repo, Identität = noreply wie Hauptrepo).
 - **Quelle der Inhalte:** `CLAUDE.md`, `README.md`, `shared/mk_protocol.h`, Firmware, KiCad-Dateien.
   Das Wiki *erklärt*, es kopiert nicht jede Zahl — Datenblattwerte nur, wo sie eine Entscheidung begründen.
 - **Ton:** erzählend, ehrlich. Auf der Startseite und im Footer: Projekt entsteht mit KI (Claude),
@@ -84,6 +85,8 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 
 ## Merkposten für spätere Schritte
 
+- **Startseite** später ggf. kürzen (User-Eindruck: etwas viel Info). Sidebar-Einträge „(folgt)“ beim Anlegen jeder Seite in echte Links umwandeln.
+
 - **Sounds (Schritt 11):** Die MP3/WAV-Dateien stammen aus dem Internet und werden **nicht** im Repo gehostet.
   Liegen seit 2026-10-07 lokal in `sounds/` (SD-Layout 01–09, 46 MP3 + 2 WAV, `.gitignore`). `09/old_002.mp3` ist ein Überbleibsel.
   User sucht die Quelle, das Wiki verlinkt nur. Dazu eine **Mapping-Tabelle**: Quelldatei → Dateiname auf der SD-Karte →
@@ -96,3 +99,4 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
   in der Historie (`mk_secrets.h` nie committet), `kicad-cli` 10.0.6 vorhanden.
 - 2026-10-07: Schritt 1 umgesetzt und mit User durchgesehen, Historie bereinigt, gepusht. Wartet auf GO für Schritt 2.
 - 2026-10-07: Repo öffentlich, Wiki aktiviert, Beschreibung + Topics gesetzt. Gerüst (Home, _Sidebar, _Footer) als Entwurf im Scratchpad; Push sobald User die erste Wiki-Seite angelegt hat.
+- 2026-10-07: Schritt 2 fertig. Wiki-Gerüst gepusht (Home, _Sidebar, _Footer). User: Startseite evtl. zu viel Info, vorerst so lassen. Leser duzen.
