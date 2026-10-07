@@ -95,8 +95,7 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 
 ## Merkposten für spätere Schritte
 
-- **Startsound des Karts fehlt** seit DF_DIAG=false: `playCharIntro()` läuft beim Kaltstart direkt nach `gDf.begin()`, die 200-ms-Pause davor gibt es nur noch mit DF_DIAG → DFPlayer vermutlich nicht bereit. Fix nur nach User-OK.
-
+- **Startsound des Karts:** behoben 2026-10-07 (DFPlayer-Reset vor den Selbsttests, Lautstärke + Sound danach). Gebaut (car, car_v2), **noch nicht geflasht/getestet** → Kart per OTA (`car_ota`) aktualisieren und prüfen, ob der Erkennungssound beim Kaltstart wieder kommt.
 - **Offene „(folgt)“-Verweise** beim Anlegen ersetzen: „Nachbauen“ (Kart-Board, Firmware-Kart, Sidebar), „Strecke und IR-System“ (Systemüberblick, Sidebar).
 
 - **Schalter-Platinchen V2 (Idee):** +BATT/MID/BATT_SW-Flächen unter Q1/Q2 auch auf B.Cu, mit Vias. Bestellte V1: Power-Flächen nur F.Cu, keine Vias (geprüft 2026-10-07). Nach Lieferung Fingertest an Q1 bei blockiertem Motor.

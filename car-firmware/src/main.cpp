@@ -1077,6 +1077,24 @@ void setup() {
     readCharacter();
     Serial.printf("[CHAR] %s (folder %d)\n", gCharName, gCharFolder);
 
+    // DFPlayer — Warmstart: nicht zurücksetzen (spart bis zu 2.2 s Warten),
+    // keine Diagnose, kein Intro-Sound mitten im Rennen. Kaltstart: vor den
+    // Selbsttests, damit der DFPlayer nach seinem Reset Zeit zum Hochfahren hat.
+    if (warm) {
+        gDf.begin(gDfSerial, false, false);
+        gDfOk = true;
+        gDf.volume(DF_VOLUME);
+        Serial.println("[DF] Warmstart, ohne Reset");
+    } else if (gDf.begin(gDfSerial, false)) {
+        gDfOk = true;
+        Serial.println("[DF] ok");  // ohne ACK liefert begin() immer true — sagt nichts
+        if (DF_DIAG) dfDiag();
+        // Lautstärke und Erkennungssound kommen erst nach Servo-/Motortest:
+        // begin() setzt den DFPlayer zurück, Befehle direkt danach gingen verloren.
+    } else {
+        Serial.println("[DF] FEHLER");
+    }
+
     // Servo
     bool servoOk = ledcAttach(PIN_SERVO, SERVO_FREQ_HZ, SERVO_RES_BITS);
     if (servoOk && warm) {
@@ -1115,6 +1133,17 @@ void setup() {
         lightMainWrite(0);
         digitalWrite(PIN_LIGHT_REV, LOW);
     }
+    // Erkennungssound erst jetzt: der DFPlayer hatte seit begin() die Dauer der
+    // Selbsttests (~1.4 s) zum Hochfahren.
+    if (!warm && gDfOk) {
+        gDf.volume(DF_VOLUME);
+        delay(50);
+        playCharIntro();  // Soundcheck + Kontrolle der DIP-Stellung
+        if (DF_DIAG) {
+            delay(600);
+            Serial.printf("[DFDIAG] state 600ms nach play: %d\n", gDf.readState());
+        }
+    }
 
     // IR LED
     pinMode(PIN_IR, OUTPUT);
@@ -1131,28 +1160,6 @@ void setup() {
     // EEPROM
     eepromLoad();
     Serial.printf("[EEPROM] ch=%d trim=%d\n", gChannel, gTrim);
-
-    // DFPlayer — Warmstart: nicht zurücksetzen (spart bis zu 2.2 s Warten),
-    // keine Diagnose, kein Intro-Sound mitten im Rennen.
-    if (warm) {
-        gDf.begin(gDfSerial, false, false);
-        gDfOk = true;
-        gDf.volume(DF_VOLUME);
-        Serial.println("[DF] Warmstart, ohne Reset");
-    } else if (gDf.begin(gDfSerial, false)) {
-        gDfOk = true;
-        Serial.println("[DF] ok");  // ohne ACK liefert begin() immer true — sagt nichts
-        if (DF_DIAG) dfDiag();
-        gDf.volume(DF_VOLUME);
-        if (DF_DIAG) delay(200);
-        playCharIntro();  // Soundcheck + Kontrolle der DIP-Stellung
-        if (DF_DIAG) {
-            delay(600);
-            Serial.printf("[DFDIAG] state 600ms nach play: %d\n", gDf.readState());
-        }
-    } else {
-        Serial.println("[DF] FEHLER");
-    }
 
     // ESP-NOW
     // Vor dem Funkstart: die Bibliothek setzt beim STA_START-Ereignis den
