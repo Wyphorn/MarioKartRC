@@ -129,7 +129,7 @@
 // Spannungsteiler: R_top = R_bot (beliebiger gleicher Wert 1k–100k)
 // → V_out = 5V × 0.5 = 2.5V, ADS-Wert = 2.5/4.096 × 32767 ≈ 19989
 // Minimum: Joystick bei GND → 0V → ADS ≈ 0
-// Default-Center: halber Bereich (überschrieben durch Offset-Kalibrierung beim Boot)
+// Default-Center: halber Bereich (überschrieben durch die Offset-Kalibrierung im Menü, EEPROM)
 #define JS_DEFAULT_MIN     0
 #define JS_DEFAULT_MAX     19989
 #define JS_DEFAULT_CENTER  9994      // JS_DEFAULT_MAX / 2
