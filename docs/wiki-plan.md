@@ -19,7 +19,7 @@ Status: ✅ fertig · 🔄 in Arbeit / in Durchsicht · ⏳ offen · ⏸ wartet 
 | 8 | Seite: Software Fernbedienung | ✅ |
 | 9 | Seite: Software Kart (inkl. OTA, DFPlayer/SD-Karte) | ✅ |
 | 10 | Seite: Strecke, IR-System, Basisstation (Planungsstand) | ✅ |
-| 11 | Seite: Nachbauen (Stückliste, Bestellen, Flashen, Akku-Regeln) | 🔄 Durchsicht, Sound-Quelle fehlt |
+| 11 | Seite: Nachbauen (Stückliste, Bestellen, Flashen, Akku-Regeln) | 🔄 Durchsicht |
 | 12 | Fotos und Video einbinden | ⏸ User liefert |
 | 13 | README kürzen und aufs Wiki verweisen | ⏳ |
 | 14 | Optional: Blog / „Was letzte Woche geschah“ | ⏳ später |
@@ -105,7 +105,8 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 
 - **Startseite** später ggf. kürzen (User-Eindruck: etwas viel Info). Sidebar-Einträge „(folgt)“ beim Anlegen jeder Seite in echte Links umwandeln.
 
-- **Sounds (Schritt 11):** Die MP3/WAV-Dateien stammen aus dem Internet und werden **nicht** im Repo gehostet.
+- **Sounds:** erledigt 2026-10-07 (Quelle Sounds Resource MK64, Soll-Belegung im Wiki, lokale `sounds/` kanonisch umgebaut). Offen beim User: SD-Karten neu bespielen; Sounds für Rosalina und „vom Panzer getroffen“ fehlen.
+- *(alt)* **Sounds (Schritt 11):** Die MP3/WAV-Dateien stammen aus dem Internet und werden **nicht** im Repo gehostet.
   Liegen seit 2026-10-07 lokal in `sounds/` (SD-Layout 01–09, 46 MP3 + 2 WAV, `.gitignore`). `09/old_002.mp3` ist ein Überbleibsel.
   User sucht die Quelle, das Wiki verlinkt nur. Dazu eine **Mapping-Tabelle**: Quelldatei → Dateiname auf der SD-Karte →
   Ordner (pro Charakter). Bezug: Memory „SD-Ordner umbenennen“ und
@@ -133,3 +134,4 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 - 2026-10-07: Schritt 9 abgenommen. Startsound im Wiki gestrichen, Heimnetz durch Platzhalter ersetzt (Wiki + platformio.ini).
 - 2026-10-07: Schritt 10: Seite „Strecke und IR-System“ online. Geklärt: −8/0/+8 cm = Sender am Auto, Empfänger im 5-cm-Raster (Vernier: max. 1 cm Abstand).
 - 2026-10-07: Schritt 11: Seite „Nachbauen“ online, Stücklisten-CSV unter docs/bom/ (Export im Skript). Offen: Sound-Quelle (User), Stand der Ordner in sounds/ (alt/kanonisch?), 09/003–006 Inhalt; 07=08 identisch, 03/04 nur je 2 verschiedene Dateien.
+- 2026-10-07: Sound-Abschnitt fertig. sounds/ umgebaut (02 Luigi, 03 Yoshi, 04 Bowser, 05 DK), 09/002 = Original wiederhergestellt.
