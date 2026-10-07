@@ -12,6 +12,7 @@ Status: ✅ fertig · 🔄 in Arbeit / in Durchsicht · ⏳ offen · ⏸ wartet 
 | 2 | Repo öffentlich schalten, Wiki aktivieren, Wiki-Gerüst (Home, Sidebar, Footer) | ✅ |
 | 3 | Bilder aus KiCad exportieren (Schaltpläne, Platinen, 3D-Renderings) | ✅ |
 | 4 | Seite: Projektüberblick und Systemarchitektur (inkl. Protokoll) | 🔄 Durchsicht |
+| 4b | Seite: Spielmodi (Rennen + Items, Hunter, Ideen wie Capture the Flag) | 🔄 Durchsicht |
 | 5 | Seiten: Hardware Fernbedienung | ⏳ |
 | 6 | Seiten: Hardware Kart (Kart-Board + Schalter-Platinchen) | ⏳ |
 | 7 | Seite: Pannen und Lehren (geflickte Platine, falsche Diode, Durchgeher, …) | ⏳ |
@@ -44,6 +45,7 @@ Status: ✅ fertig · 🔄 in Arbeit / in Durchsicht · ⏳ offen · ⏸ wartet 
 ```
 Home                         – kurz: was, warum, Status, KI-Hinweis
 ├─ Systemüberblick           – Architektur, Modi, Funkprotokoll
+├─ Spielmodi                 – Rennen + Items, Hunter, weitere Ideen
 ├─ Hardware
 │  ├─ Fernbedienung          – Stromversorgung, Verpolschutz, Rumble, Pins, V1→V2
 │  ├─ Tasterplatine
@@ -111,3 +113,4 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 - 2026-10-07: Schritt 3 umgesetzt, Bilder + Skript gepusht, wartet auf Durchsicht.
 - 2026-10-07: Schritt 3 abgenommen (Zoom/Anschnitt bleibt so, Renderings sind Beiwerk).
 - 2026-10-07: Schritt 4: Seite „Systemüberblick“ (Bausteine, ESP-NOW, Modi mit Mermaid-Diagrammen, Koppeln, Pakettabelle, Jäger-Modus). Sidebar verlinkt.
+- 2026-10-07: Neue Seite „Spielmodi“ (User-Wunsch): Items und Hunter aus dem Systemüberblick ausgelagert, Capture the Flag als Idee.
