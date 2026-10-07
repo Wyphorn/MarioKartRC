@@ -17,7 +17,7 @@ Status: ✅ fertig · 🔄 in Arbeit / in Durchsicht · ⏳ offen · ⏸ wartet 
 | 6 | Seiten: Hardware Kart (Kart-Board + Schalter-Platinchen) | ✅ |
 | 7 | Seite: Pannen und Lehren (geflickte Platine, falsche Diode, Durchgeher, …) | ✅ |
 | 8 | Seite: Software Fernbedienung | ✅ |
-| 9 | Seite: Software Kart (inkl. OTA, DFPlayer/SD-Karte) | 🔄 Durchsicht |
+| 9 | Seite: Software Kart (inkl. OTA, DFPlayer/SD-Karte) | ✅ |
 | 10 | Seite: Strecke, IR-System, Basisstation (Planungsstand) | ⏳ |
 | 11 | Seite: Nachbauen (Stückliste, Bestellen, Flashen, Akku-Regeln) | ⏳ |
 | 12 | Fotos und Video einbinden | ⏸ User liefert |
@@ -95,6 +95,8 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 
 ## Merkposten für spätere Schritte
 
+- **Startsound des Karts fehlt** seit DF_DIAG=false: `playCharIntro()` läuft beim Kaltstart direkt nach `gDf.begin()`, die 200-ms-Pause davor gibt es nur noch mit DF_DIAG → DFPlayer vermutlich nicht bereit. Fix nur nach User-OK.
+
 - **Offene „(folgt)“-Verweise** beim Anlegen ersetzen: „Nachbauen“ (Kart-Board, Firmware-Kart, Sidebar), „Strecke und IR-System“ (Systemüberblick, Sidebar).
 
 - **Schalter-Platinchen V2 (Idee):** +BATT/MID/BATT_SW-Flächen unter Q1/Q2 auch auf B.Cu, mit Vias. Bestellte V1: Power-Flächen nur F.Cu, keine Vias (geprüft 2026-10-07). Nach Lieferung Fingertest an Q1 bei blockiertem Motor.
@@ -130,3 +132,4 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 - 2026-10-07: Schritt 8: Seite „Firmware Fernbedienung“ online (Ablauf, Bedienung, Menü, Kalibrierung, LED, Display, Akku, Sicherheit, Bauen). Hinweis: Code-Kommentar Z.132 „Offset beim Boot“ ist veraltet.
 - 2026-10-07: Schritt 8 abgenommen. Bestätigt: Offset nur im Menü; Max. Speed/Rumble/Sticks tauschen gelten bewusst nur für die Session. Code-Kommentar korrigiert.
 - 2026-10-07: Schritt 9: Seite „Firmware Kart“ online (Fahren, Tasten/Stern, SD-Layout, LEDs, Kollision, Akku, OTA-Anleitung, Envs, Offenes).
+- 2026-10-07: Schritt 9 abgenommen. Startsound im Wiki gestrichen, Heimnetz durch Platzhalter ersetzt (Wiki + platformio.ini).
