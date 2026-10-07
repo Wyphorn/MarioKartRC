@@ -85,8 +85,9 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 ## Merkposten für spätere Schritte
 
 - **Sounds (Schritt 11):** Die MP3/WAV-Dateien stammen aus dem Internet und werden **nicht** im Repo gehostet.
+  Liegen seit 2026-10-07 lokal in `sounds/` (SD-Layout 01–09, 46 MP3 + 2 WAV, `.gitignore`). `09/old_002.mp3` ist ein Überbleibsel.
   User sucht die Quelle, das Wiki verlinkt nur. Dazu eine **Mapping-Tabelle**: Quelldatei → Dateiname auf der SD-Karte →
-  Ordner (pro Charakter). Ordner der Sounds beim User erfragen. Bezug: Memory „SD-Ordner umbenennen“ und
+  Ordner (pro Charakter). Bezug: Memory „SD-Ordner umbenennen“ und
   README-Abschnitt „SD-Karte des DFPlayers“.
 
 ## Log

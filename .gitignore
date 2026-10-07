@@ -26,3 +26,6 @@ kicad/projects/*/gerber/*/
 
 # WLAN-Zugangsdaten (Vorlage: shared/mk_secrets.example.h)
 shared/mk_secrets.h
+
+# Sound-Dateien (aus dem Internet, nicht selbst gehostet) – Mapping-Tabelle im Wiki
+sounds/

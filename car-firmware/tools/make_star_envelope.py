@@ -3,7 +3,7 @@
 
 Lautstaerke-Huellkurve in 20-ms-Schritten (RMS), auf 0..255 normiert, fuer das
 Pulsieren des Hauptlichts im Stern-Modus. Aufruf:
-    python3 tools/make_star_envelope.py "/pfad/zu/09/007.wav"
+    python3 tools/make_star_envelope.py ../sounds/09/007.wav   (sounds/ liegt lokal, nicht im Git)
 Braucht numpy. Nach einem Tausch des Lieds neu erzeugen.
 """
 import sys, wave
