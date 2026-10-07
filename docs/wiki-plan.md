@@ -14,8 +14,8 @@ Status: ✅ fertig · 🔄 in Arbeit / in Durchsicht · ⏳ offen · ⏸ wartet 
 | 4 | Seite: Projektüberblick und Systemarchitektur (inkl. Protokoll) | ✅ |
 | 4b | Seite: Spielmodi (Rennen + Items, Hunter, Ideen wie Capture the Flag) | ✅ |
 | 5 | Seiten: Hardware Fernbedienung | ✅ |
-| 6 | Seiten: Hardware Kart (Kart-Board + Schalter-Platinchen) | 🔄 Durchsicht |
-| 7 | Seite: Pannen und Lehren (geflickte Platine, falsche Diode, Durchgeher, …) | ⏳ |
+| 6 | Seiten: Hardware Kart (Kart-Board + Schalter-Platinchen) | ✅ |
+| 7 | Seite: Pannen und Lehren (geflickte Platine, falsche Diode, Durchgeher, …) | 🔄 Durchsicht |
 | 8 | Seite: Software Fernbedienung | ⏳ |
 | 9 | Seite: Software Kart (inkl. OTA, DFPlayer/SD-Karte) | ⏳ |
 | 10 | Seite: Strecke, IR-System, Basisstation (Planungsstand) | ⏳ |
@@ -123,3 +123,4 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 - 2026-10-07: Schritt 4/4b abgenommen. Schritt 5: Seiten „Fernbedienung“ (V2, mit V1-Problemtabelle) und „Tasterplatine“ online.
 - 2026-10-07: Schritt 5 abgenommen.
 - 2026-10-07: Schritt 6: Seiten „Kart-Board“ (V2, Chassis, Figurenwahl-Tabelle, V1-Problemtabelle) und „Schalter-Platinchen“ online.
+- 2026-10-07: Schritt 6 abgenommen. Schritt 7: Seite „Pannen und Lehren“ online (14 Geschichten in 5 Gruppen, inkl. „Arbeiten mit KI“).
