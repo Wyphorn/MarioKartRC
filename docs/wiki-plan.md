@@ -9,7 +9,7 @@ Status: ✅ fertig · 🔄 in Arbeit / in Durchsicht · ⏳ offen · ⏸ wartet 
 |---|---|---|
 | 0 | Plan erstellen und vorstellen | ✅ |
 | 1 | Repo vorbereiten (aufräumen, Lizenz, Prüfung vor Veröffentlichung) | ✅ |
-| 2 | Repo öffentlich schalten, Wiki aktivieren, Wiki-Gerüst (Home, Sidebar, Footer) | ⏳ |
+| 2 | Repo öffentlich schalten, Wiki aktivieren, Wiki-Gerüst (Home, Sidebar, Footer) | 🔄 öffentlich ✅, Wiki an ✅, wartet auf erste Seite (User) |
 | 3 | Bilder aus KiCad exportieren (Schaltpläne, Platinen, 3D-Renderings) | ⏳ |
 | 4 | Seite: Projektüberblick und Systemarchitektur (inkl. Protokoll) | ⏳ |
 | 5 | Seiten: Hardware Fernbedienung | ⏳ |
@@ -95,3 +95,4 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 - 2026-10-07: Plan erstellt. Vorab geprüft: Repo privat, Wiki aus, 28 Commits, keine Zugangsdaten
   in der Historie (`mk_secrets.h` nie committet), `kicad-cli` 10.0.6 vorhanden.
 - 2026-10-07: Schritt 1 umgesetzt und mit User durchgesehen, Historie bereinigt, gepusht. Wartet auf GO für Schritt 2.
+- 2026-10-07: Repo öffentlich, Wiki aktiviert, Beschreibung + Topics gesetzt. Gerüst (Home, _Sidebar, _Footer) als Entwurf im Scratchpad; Push sobald User die erste Wiki-Seite angelegt hat.
