@@ -16,15 +16,29 @@
 
 // --- Pins (ESP32-C6-SuperMini, Repin 2026-09-06) ---
 // Tabu: GPIO12/13 (USB D-/D+), GPIO8/9 (RGB-LED / BOOT-Strap),
-//       GPIO16/17 (UART0 — TXD0 wird vom Boot-ROM aktiv getrieben).
+//       GPIO16/17 (UART0 — TXD0 wird vom Boot-ROM aktiv getrieben; auf V2
+//       traegt GPIO16 bewusst die Status-LED, ein reiner Ausgang).
 // ADC1 liegt nur auf GPIO0–6, der Batterie-Monitor muss dorthin.
 #define PIN_BAT_ADC      0   // ADC1_0, externer Teiler 100k/100k
 #define PIN_MODE         1   // fest an 3.3V/GND — darf kein UART0-TX sein
 #define PIN_BTN_RED      2
 #define PIN_BTN_BLUE     3
 #define PIN_BTN_GREEN    4
+// FB-Board V2 (2026-10-06): Gelb von inneren Pad 23 an die Hauptleiste
+// (GPIO5), Display-MOSI auf GPIO6, Status-LED auf GPIO16 (UART0 TX — der
+// Boot-ROM gibt dort ~17 ms sein Startprotokoll aus, die LED blitzt beim
+// Einschalten evtl. kurz in einer Zufallsfarbe, bis setup() sie setzt).
+// Kein fliegender Draht mehr. env fb_v2 setzt -DFB_REV=2.
+#ifndef FB_REV
+#define FB_REV 1
+#endif
+#if FB_REV == 2
+#define PIN_TFT_MOSI     6   // Display SDA, ueber R17 33 Ohm
+#define PIN_LED         16   // WS2812B DATA, ueber R6 330 Ohm
+#else
 #define PIN_TFT_MOSI     5   // FSPI MOSI — IO_MUX, volle Taktrate
 #define PIN_LED          6   // WS2812B DATA
+#endif
 #define PIN_TFT_SCK      7   // FSPI SCK — IO_MUX, volle Taktrate
 #define PIN_TFT_BL      14   // Backlight, PWM-gedimmt
 #define PIN_TFT_CS      15
@@ -38,18 +52,27 @@
 // Hauptleisten — dort ist je ein Draht noetig.
 #define PIN_BTN_STICK_R 21   // reserviert, bewusst ohne Funktion
 #define PIN_BTN_STICK_L 22   // reserviert, bewusst ohne Funktion
+#if FB_REV == 2
+#define PIN_BTN_YELLOW   5   // Hauptleiste. Strap MTDI (nur SDIO-Flanke) → folgenlos
+#else
 #define PIN_BTN_YELLOW  23   // inneres Pad — einziger Draht. Bewusst ein Taster
                              // und nicht MOSI: bei einem Tastersignal ist eine
                              // fliegende Verbindung unkritisch.
+#endif
 
 // --- ADS1115 Kanäle ---
-// ADS1115-Kanal je Achse. A2/A3 sind gegenueber der naheliegenden Reihenfolge
-// getauscht, damit sich die Leitungen von J3 zum ADS-Modul im Layout nicht
-// kreuzen. Alles Weitere folgt diesen vier Zeilen — auch CAL_STEP_CH.
-#define JS_LEFT_X   0
-#define JS_LEFT_Y   1
-#define JS_RIGHT_Y  2
-#define JS_RIGHT_X  3
+// ADS1115-Kanal je Achse, am Gerät gemessen (2026-10-04, Log der Rohwerte).
+// Die Belegung laut Schaltplan (A0 = links X ... A3 = rechts X) stimmte nicht
+// mit der Einbaulage der Sticks überein. Alles Weitere folgt diesen vier
+// Zeilen — Fahren, Menü-Navigation und auch CAL_STEP_CH.
+#define JS_LEFT_X   2   // linker Stick seitlich
+#define JS_LEFT_Y   3   // linker Stick vor/zurück
+#define JS_RIGHT_Y  0   // rechter Stick vor/zurück
+#define JS_RIGHT_X  1   // rechter Stick seitlich
+// Kanäle, deren Rohwert entgegen der Erwartung läuft (rechts = kleiner Wert) —
+// bei beiden Sticks die Seitwärtsachse. Gilt für Fahrbefehl und
+// Menü-Navigation, nicht für die Kalibrierung.
+#define JS_INVERTED(ch)  ((ch) == JS_RIGHT_X || (ch) == JS_LEFT_X)
 
 // --- Display: 1.9" IPS 170x320 ST7789, Querformat ---
 // init(170,320) laesst die Library colstart=35 / rowstart=0 rechnen — genau der
@@ -164,7 +187,15 @@
 #define BAT_OFF_SAMPLES 3
 
 // --- Menü ---
-#define MENU_ITEM_COUNT  9
+// Menue-Eintraege ueber Namen statt Nummern — neue Eintraege verschieben sonst
+// still alle Indizes dahinter.
+enum MenuItem : int8_t {
+    MI_CALIB, MI_SPEED, MI_LANG, MI_RUMBLE,
+    MI_SWAP, MI_FIRMWARE, MI_DEBUG, MI_RESET, MI_EXIT, MI_COUNT
+};
+// Untermenue "Kalibrierung"
+enum CalItem : int8_t { CI_OFFSET, CI_MINMAX, CI_TRIM, CI_STEERCAL, CI_COUNT };
+#define MENU_ITEM_COUNT  MI_COUNT
 #define MENU_VISIBLE     6
 
 // --- Sprachen ---
@@ -209,19 +240,39 @@ struct Strings {
     const char* connectingGame;     // "Verbinde mit Basis"
     const char* rejoiningLine1;     // Zeile 1: "Verbinde mit"
     const char* rejoiningLine2;     // Zeile 2: "letztem Spiel"
+    const char* rejoiningSkip;      // Hinweis: Suche per Taste abbrechen
     const char* batEmpty;           // Statuszeile ab 0% (3.4V)
     const char* batOffLine1;        // Abschalt-Screen Zeile 1
     const char* batOffLine2;        // Abschalt-Screen Zeile 2
     const char* stickFault;         // Statuszeile bei I2C-Dauerstoerung
+    // Auto-Update (OTA), siehe OTA-Abschnitt in mk_protocol.h
+    const char* otaQuestion;
+    const char* otaConfirmHint;
+    const char* otaNoCar;
+    const char* otaNoReply;
+    const char* otaRejBat;
+    const char* otaRejWifi;
+    const char* otaWaiting;         // ueber dem Hostnamen
+    const char* otaBack;
+    const char* otaLeaveHint;
+    const char* fwTargets[2];       // Untermenue Firmware-Update: Auto, Fernbedienung
+    const char* fwFbLine1;          // Platzhalter FB-Update
+    const char* fwFbLine2;
+    // Lenkung kalibrieren
+    const char* scSteps[3];         // links, rechts, geradeaus
+    const char* scHint;
+    const char* scSaved;
+    const char* scInvalid;
+    const char* calItems[CI_COUNT]; // Untermenue Kalibrierung
 };
 
 const Strings STRINGS[LANG_COUNT] = {
     // LANG_DE
     {
         "Einstellungen",
-        { "Offset-Kalibrierung", "Min/Max-Kalibrierung",
-          "Servo-Trim", "Max. Speed", "Sprache", "Rumble",
-          "Joysticks tauschen", "Debug", "Reset" },
+        { "Kalibrierung", "Max. Speed", "Sprache", "Rumble",
+          "Joysticks tauschen", "Firmware-Update", "Debug", "Reset",
+          "Speichern & beenden" },
         "Offset-Kalibrierung",
         "Sticks loslassen",
         "Kalibriere...",
@@ -247,17 +298,28 @@ const Strings STRINGS[LANG_COUNT] = {
         "An", "Aus",
         "An", "Aus",
         "Warte auf Auto", "Verbinde mit Basis",
-        "Verbinde mit", "letztem Spiel",
+        "Verbinde mit", "letztem Spiel", "Taste = neu suchen",
         "Akku leer!",
         "Akku leer", "Bitte ausschalten",
-        "Sticks gestoert!"
+        "Sticks gestoert!",
+        "Auto updaten?", "Gruen = ja  Rot = nein",
+        "Kein Auto verbunden", "Auto antwortet nicht",
+        "Auto-Akku zu leer", "Auto ohne WLAN-Daten",
+        "Warte auf Firmware:", "Auto wieder verbunden",
+        "Rot = zurueck",
+        { "Auto", "Fernbedienung" },
+        "Noch nicht verfuegbar", "Bitte per USB flashen",
+        { "Voll links", "Voll rechts", "Geradeaus" },
+        "Gruen=ok  Rot=abbrechen",
+        "Lenkung gespeichert", "Werte ungueltig",
+        { "Offset (Nullpunkt)", "Min/Max (Sticks)", "Servo-Trim", "Lenkung kalibrieren" }
     },
     // LANG_EN
     {
         "Settings",
-        { "Offset Calibration", "Min/Max Calibration",
-          "Servo Trim", "Max. Speed", "Language", "Rumble",
-          "Swap Sticks", "Debug", "Reset" },
+        { "Calibration", "Max. Speed", "Language", "Rumble",
+          "Swap Sticks", "Firmware Update", "Debug", "Reset",
+          "Save & exit" },
         "Offset Calibration",
         "Release sticks",
         "Calibrating...",
@@ -283,10 +345,21 @@ const Strings STRINGS[LANG_COUNT] = {
         "On", "Off",
         "On", "Off",
         "Waiting for car", "Connecting to base",
-        "Reconnecting", "to last game",
+        "Reconnecting", "to last game", "Button = new search",
         "Battery empty!",
         "Battery empty", "Please switch off",
-        "Stick fault!"
+        "Stick fault!",
+        "Update car?", "Green = yes  Red = no",
+        "No car connected", "Car not responding",
+        "Car battery too low", "Car has no WiFi data",
+        "Waiting for firmware:", "Car reconnected",
+        "Red = back",
+        { "Car", "Remote" },
+        "Not available yet", "Please flash via USB",
+        { "Full left", "Full right", "Straight ahead" },
+        "Green=ok  Red=cancel",
+        "Steering saved", "Invalid values",
+        { "Offset (center)", "Min/Max (sticks)", "Servo Trim", "Steering calibration" }
     }
 };
 
@@ -305,6 +378,14 @@ enum FBState {
     STATE_LANGUAGE,
     STATE_RESET,
     STATE_DEBUG,
+    STATE_CAL_MENU,      // Untermenue Kalibrierung
+    STATE_SERVO_CAL,     // Lenkung kalibrieren: links, rechts, geradeaus
+    STATE_INFO,          // kurze Meldung, danach Hauptmenue
+    STATE_FW_MENU,       // Untermenue Firmware-Update: Auto / Fernbedienung
+    STATE_OTA_CONFIRM,   // Sicherheitsabfrage
+    STATE_OTA_SEND,      // Request raus, warte auf MK_OtaStatus
+    STATE_OTA_WAIT,      // Auto im Update-Modus, warte auf seine Rueckkehr
+    STATE_OTA_MSG,       // Meldung, danach zurueck ins Untermenue bzw. Normalbetrieb
 };
 
 // --- Globale Variablen ---
@@ -324,6 +405,38 @@ bool    adsOK   = false;
 #define I2C_REINIT_GAP_MS       500     // Mindestabstand zwischen Neuinits
 #define I2C_FAULT_AFTER_REINITS   3     // danach Hinweis auf dem Display
 bool stickFault = false;                // Dauerstoerung, Anzeige in der Statuszeile
+
+// ── Plausibilitaet der Stick-Werte (2026-10-04) ──
+// Anlass: Die FB sendete Vollgas + volle Lenkung, waehrend die Sticks ruhig
+// lagen, und reagierte auf keine Eingabe, bis sie aus- und eingeschaltet wurde.
+// Der ADS1115 antwortete also auf seine Adresse, lieferte aber unbrauchbare
+// Werte — das fing weder adsAlive() noch die Pruefung auf negative Counts ab.
+// Ursache nicht bestaetigt. Im Fahrbetrieb gilt deshalb zusaetzlich als Stoerung:
+//  - ein Wert deutlich ausserhalb des kalibrierten Bereichs: ein Poti kommt
+//    nicht weiter als bis zu seinem Anschlag (stickInRange), und
+//  - drei verschiedene Kanaele mit exakt demselben Wert: dann gibt der ADS
+//    immer dasselbe Register zurueck, statt zu messen. Dafuer wird in jeder
+//    Runde einer der beiden ungenutzten Kanaele mitgelesen (Loop).
+// Bewusst NICHT "Wert bleibt laenger gleich": am Anschlag rauscht ein Stick
+// kaum (gemessen: 8–9 Counts, bis 680 ms am Stueck identisch) — das gaebe
+// Fehlalarme bei gehaltenem Vollgas.
+// Folge wie bei jeder I2C-Stoerung: neutral senden, Bus neu initialisieren.
+#define STICK_RANGE_MARGIN_PCT  15     // Reserve ueber den kalibrierten Anschlag hinaus
+#define STICK_RANGE_MARGIN_MIN  1500   // mindestens so viele Counts Reserve
+
+extern int16_t jsMin[4], jsMax[4];   // Kalibrierung, weiter unten definiert
+
+bool stickInRange(uint8_t ch, int16_t v) {
+    int32_t span   = (int32_t)jsMax[ch] - jsMin[ch];
+    int32_t margin = max((int32_t)STICK_RANGE_MARGIN_MIN, span * STICK_RANGE_MARGIN_PCT / 100);
+    if (v >= jsMin[ch] - margin && v <= jsMax[ch] + margin) return true;
+    static uint32_t lastLog = 0;   // hoechstens eine Meldung pro Sekunde
+    if (nowMs() - lastLog >= 1000) {
+        lastLog = nowMs();
+        Serial.printf("[STICK] Kanal A%u = %d ausserhalb %d..%d\n", ch, v, jsMin[ch], jsMax[ch]);
+    }
+    return false;
+}
 
 bool adsAlive() {
     Wire.beginTransmission(0x48);
@@ -416,10 +529,11 @@ int16_t jsMaxTemp[4];
 // Direct Mode: FB meldet sich nach Neustart/Funkstille selbst beim bekannten Auto
 // (gespeicherter Kanal + Auto-MAC), ohne Beacon. Nach dem Boot kurz, im Betrieb
 // so lange wie das Auto auf dem Kanal wartet (LINK_LOST_MS in car-firmware).
-// 15 s statt 5 s: das Auto braucht zum Booten ~10 s (Servo-Test, DFPlayer-
-// Diagnose). Mit 5 s gab die FB beim gemeinsamen Einschalten zu frueh auf und
-// beide landeten auf Kanal 1.
-#define RECONNECT_BOOT_MS       15000
+// Nach dem Boot kurz halten: das gespeicherte Auto kann seit Wochen weg sein.
+// Gibt die FB zu frueh auf, ist das harmlos — das Auto faellt 5 s nach seinem
+// Boot selbst auf Kanal 1 zurueck und beide koppeln dort neu. Per Taste laesst
+// sich die Suche nach dem Boot sofort abbrechen (reconnectSkippable).
+#define RECONNECT_BOOT_MS        5000
 #define RECONNECT_LOST_MS       30000
 
 uint8_t  realMac[6];
@@ -436,6 +550,7 @@ bool             trySavedChannel    = false;
 bool             reconnecting       = false;   // Direct: gepairt, aber noch kein Feedback
 unsigned long    reconnectStart     = 0;
 unsigned long    reconnectLimit     = 0;
+bool             reconnectSkippable = false;   // nur die Suche direkt nach dem Boot
 unsigned long    savedChannelStart  = 0;
 volatile uint8_t pendingChannelSave = 0;
 
@@ -453,8 +568,26 @@ volatile bool          feedbackNew    = false;
 FeedbackState          feedback;
 unsigned long          lastFeedbackMs = 0;
 unsigned long          rumbleFbEnd    = 0;
+// Bestaetigung beim Einschalten im Menue — eigener Timer, damit das Feedback
+// des Autos (5 Hz, rumble=0 setzt rumbleFbEnd zurueck) sie nicht abwuergt.
+unsigned long          rumbleConfirmEnd = 0;
 
 volatile int8_t mappingSlot = -1;  // -1 = inaktiv, 1–8 = Slot anzeigen
+
+// Auto-Update: Antwort des Autos aus dem Callback, Auswertung im State
+volatile bool   otaStatusNew = false;
+MK_OtaStatus    otaStatusRaw;
+char            otaHost[sizeof(MK_OtaStatus::hostname)] = "";
+bool            otaMsgToReady = false;   // STATE_OTA_MSG: danach Normalbetrieb statt Untermenue
+int8_t          fwSel = 0;               // Untermenue Firmware-Update: 0 = Auto, 1 = FB
+
+// Lenkung kalibrieren: der Lenk-Stick gibt die Geschwindigkeit vor, mit der
+// sich der Servo bewegt (voll ausgelenkt SC_RATE_US_PER_S), nicht die Position.
+#define SC_RATE_US_PER_S  400
+int8_t   calSel = 0;     // Untermenue Kalibrierung
+uint8_t  scStep = 0;
+float    scUs   = 1500;
+uint16_t scVals[3];
 
 const Strings& S() { return STRINGS[langIndex]; }
 
@@ -510,6 +643,16 @@ void saveSettings() {
     EEPROM.commit();
 }
 
+// Min = kleinerer, Max = groesserer Rohwert, unabhaengig von der Stick-Richtung.
+// Bei den invertierten Seitwaertsachsen liefert der Schritt "nach links" den
+// hohen Wert — ohne das hier waeren Min und Max vertauscht und die Achse tot
+// (2026-10-04). Die Richtung regelt JS_INVERTED, nicht die Kalibrierung.
+void normalizeMinMax() {
+    for (int i = 0; i < 4; i++) {
+        if (jsMin[i] > jsMax[i]) { int16_t t = jsMin[i]; jsMin[i] = jsMax[i]; jsMax[i] = t; }
+    }
+}
+
 bool loadSettings() {
     uint16_t magic;
     EEPROM.get(EEPROM_ADDR_MAGIC, magic);
@@ -518,6 +661,7 @@ bool loadSettings() {
     EEPROM.get(EEPROM_ADDR_MIN,    jsMin);
     EEPROM.get(EEPROM_ADDR_MAX,    jsMax);
     EEPROM.get(EEPROM_ADDR_LANG,   langIndex);
+    normalizeMinMax();   // repariert auch vor dem Fix gespeicherte Kalibrierungen
     Serial.printf("[EEPROM] ctr:%d %d %d %d  min:%d %d %d %d  max:%d %d %d %d  lang:%d\n",
         jsCenter[0], jsCenter[1], jsCenter[2], jsCenter[3],
         jsMin[0], jsMin[1], jsMin[2], jsMin[3],
@@ -636,6 +780,7 @@ int16_t mapJS(int16_t raw, int ch) {
     if (v >  100) v =  100;
     if (v < -100) v = -100;
     if (v > -JS_DEADZONE && v < JS_DEADZONE) v = 0;
+    if (JS_INVERTED(ch)) v = -v;   // siehe JS_INVERTED bei den Kanal-Defines
     return (int16_t)v;
 }
 
@@ -652,12 +797,14 @@ int16_t mapJS(int16_t raw, int ch) {
 // sonst nur bei Aenderungen neu und liesse z.B. nach dem Reconnect den
 // Verbinde-Screen stehen, weil paired dabei durchgehend true bleibt.
 bool normalOnScreen = false;
+bool connectingOnScreen = false;   // wie normalOnScreen, fuer displayConnecting()
 
 void dispClear() {
     mkWatchdogCheckpoint();
     display.fillScreen(COL_BG);   // ~25 ms bei 40 MHz
     mkWatchdogCheckpoint();
     normalOnScreen = false;
+    connectingOnScreen = false;
 }
 
 void dispTitle(const char* title) {
@@ -821,11 +968,17 @@ void displayConnecting() {
     static FBMode  c_mode  = MODE_DIRECT;
     static uint8_t c_bat   = 0xFF;
 
+    static bool    c_skip  = false;
+
     bool rejoin = trySavedChannel || reconnecting;
-    if (c_valid && rejoin == c_saved
+    bool skip   = reconnecting && reconnectSkippable;
+    // connectingOnScreen: zwischendurch war etwas anderes zu sehen (z.B. das
+    // Menue) — dann neu zeichnen, auch wenn sich am Inhalt nichts geaendert hat.
+    if (c_valid && connectingOnScreen && rejoin == c_saved && skip == c_skip
                 && fbMode == c_mode && batPct == c_bat) return;
     c_valid = true;
     c_saved = rejoin;
+    c_skip  = skip;
     c_mode  = fbMode;
     c_bat   = batPct;
 
@@ -833,11 +986,13 @@ void displayConnecting() {
     if (rejoin) {
         mkWatchdogCheckpoint(); dispCentered(S().rejoiningLine1, 58, 2, COL_FG);
         mkWatchdogCheckpoint(); dispCentered(S().rejoiningLine2, 84, 2, COL_FG);
+        if (skip) { mkWatchdogCheckpoint(); dispCentered(S().rejoiningSkip, 130, 2, COL_DIM); }
     } else {
         const char* msg = (fbMode == MODE_DIRECT) ? S().connectingDirect : S().connectingGame;
         mkWatchdogCheckpoint(); dispCentered(msg, 72, 2, COL_FG);
     }
     mkWatchdogCheckpoint(); drawBatteryIcon(batPct);
+    connectingOnScreen = true;
 }
 
 void displayMapping(int8_t slot) {
@@ -852,48 +1007,72 @@ void displayMapping(int8_t slot) {
 // ──────────────────────────────────────────────
 // Display: Menue — 6 von 9 Eintraegen sichtbar
 // ──────────────────────────────────────────────
-void displayMenu() {
-    if (!dispOK) return;
-    dispClear();
-    dispTitle(S().menuTitle);
-
-    for (int i = menuScroll; i < menuScroll + MENU_VISIBLE && i < MENU_ITEM_COUNT; i++) {
-        int y = 34 + (i - menuScroll) * LINE_H;
-        char buf[32];
-        const char* itemText = S().menuItems[i];
-        if (i == 5) {
-            snprintf(buf, sizeof(buf), "Rumble: %s",
-                rumbleEnabled ? S().rumbleOn : S().rumbleOff);
-            itemText = buf;
-        } else if (i == 6) {
-            snprintf(buf, sizeof(buf), "%s: %s",
-                S().menuItems[6],
-                swapSticks ? S().swapOn : S().swapOff);
-            itemText = buf;
-        }
-        // 320px / 12px = 26 Zeichen, minus Rand und Scrollbar
-        char truncBuf[25];
-        if (strlen(itemText) > 24) {
-            memcpy(truncBuf, itemText, 24);
-            truncBuf[24] = '\0';
-            itemText = truncBuf;
-        }
-        if (i == menuSel) {
-            dispHighlight(y, itemText);
-        } else {
-            display.setTextSize(2);
-            display.setTextColor(COL_FG);
-            mkWatchdogCheckpoint(); display.setCursor(6, y + (LINE_H - CH_H) / 2);
-            display.print(itemText);
-        }
+// Eine Menuezeile deckend zeichnen: Hintergrund der Zeile fuellen, dann Text.
+// So aendert sich beim Scrollen nur die Zeile selbst, kein schwarzer Blitz
+// ueber den ganzen Schirm (siehe ST7789 ohne Framebuffer).
+void drawMenuRow(int i) {
+    int y = 34 + (i - menuScroll) * LINE_H;
+    char buf[32];
+    const char* itemText = S().menuItems[i];
+    if (i == MI_RUMBLE) {
+        snprintf(buf, sizeof(buf), "Rumble: %s",
+            rumbleEnabled ? S().rumbleOn : S().rumbleOff);
+        itemText = buf;
+    } else if (i == MI_SWAP) {
+        snprintf(buf, sizeof(buf), "%s: %s",
+            S().menuItems[MI_SWAP],
+            swapSticks ? S().swapOn : S().swapOff);
+        itemText = buf;
     }
+    // 320px / 12px = 26 Zeichen, minus Rand und Scrollbar
+    char truncBuf[25];
+    if (strlen(itemText) > 24) {
+        memcpy(truncBuf, itemText, 24);
+        truncBuf[24] = '\0';
+        itemText = truncBuf;
+    }
+    if (i == menuSel) {
+        dispHighlight(y, itemText, LINE_H);   // fuellt die Zeile selbst
+    } else {
+        display.fillRect(0, y, TFT_W - 6, LINE_H, COL_BG);
+        display.setTextSize(2);
+        display.setTextColor(COL_FG);
+        mkWatchdogCheckpoint(); display.setCursor(6, y + (LINE_H - CH_H) / 2);
+        display.print(itemText);
+    }
+}
 
-    // Scrollbar rechts
+void drawMenuScrollbar() {
     const int barY = 34, barH = MENU_VISIBLE * LINE_H;
+    display.fillRect(TFT_W - 5, barY, 5, barH, COL_BG);
     display.drawFastVLine(TFT_W - 3, barY, barH, COL_DIM);
     int thumbH = barH * MENU_VISIBLE / MENU_ITEM_COUNT;
     int thumbY = barY + (barH - thumbH) * menuScroll / (MENU_ITEM_COUNT - MENU_VISIBLE);
     display.fillRect(TFT_W - 5, thumbY, 4, thumbH, COL_ACCENT);
+}
+
+// Ganzes Menue — beim Betreten und beim Zurueckkehren aus einem Untermenue.
+void displayMenu() {
+    if (!dispOK) return;
+    dispClear();
+    dispTitle(S().menuTitle);
+    for (int i = menuScroll; i < menuScroll + MENU_VISIBLE && i < MENU_ITEM_COUNT; i++)
+        drawMenuRow(i);
+    drawMenuScrollbar();
+}
+
+// Nach Auswahlwechsel: ohne Scrollen nur alte und neue Zeile, mit Scrollen
+// alle sichtbaren Zeilen und die Scrollbar — jeweils ohne fillScreen().
+void displayMenuMove(int oldSel, int oldScroll) {
+    if (!dispOK) return;
+    if (menuScroll == oldScroll) {
+        drawMenuRow(oldSel);
+        drawMenuRow(menuSel);
+    } else {
+        for (int i = menuScroll; i < menuScroll + MENU_VISIBLE && i < MENU_ITEM_COUNT; i++)
+            drawMenuRow(i);
+    }
+    drawMenuScrollbar();   // die markierte Zeile geht ueber die volle Breite
 }
 
 // ──────────────────────────────────────────────
@@ -932,10 +1111,11 @@ void displayMinMaxStep(uint8_t step) {
 // Display: Trim-Bar
 // 21 Stufen als Balken; aktiv ist alles zwischen Mitte und Trimwert.
 // ──────────────────────────────────────────────
-void displayTrimBar(int8_t trim) {
+// full = beim Betreten (Schirm loeschen), sonst nur Balken und Zahl deckend
+// neu — kein fillScreen pro Stick-Schritt, das blitzt (ST7789 ohne Framebuffer).
+void displayTrimBar(int8_t trim, bool full = true) {
     if (!dispOK) return;
-    dispClear();
-    dispTitle(S().trimTitle);
+    if (full) { dispClear(); dispTitle(S().trimTitle); }
 
     const int segW = 13, gap = 2, barH = 34, barY = 56;
     const int totalW = TRIM_STEPS * segW + (TRIM_STEPS - 1) * gap;
@@ -946,23 +1126,27 @@ void displayTrimBar(int8_t trim) {
                                   : (pos <= 0 && pos >= trim);
         int x = x0 + i * (segW + gap);
         if (active) display.fillRect(x, barY, segW, barH, COL_ACCENT);
-        else        display.drawRect(x, barY, segW, barH, COL_DIM);
+        else { display.fillRect(x, barY, segW, barH, COL_BG);
+               display.drawRect(x, barY, segW, barH, COL_DIM); }
     }
     // Mittenmarkierung
     display.drawFastVLine(TFT_W / 2, barY - 6, 4, COL_FG);
 
     char buf[8];
-    snprintf(buf, sizeof(buf), "%+d", trim);
-    mkWatchdogCheckpoint(); dispCentered(buf, 112, 3, COL_FG);
+    snprintf(buf, sizeof(buf), "%+3d", trim);   // feste Breite, deckend
+    display.setTextSize(3);
+    display.setTextColor(COL_FG, COL_BG);
+    mkWatchdogCheckpoint(); display.setCursor((TFT_W - 3 * 18) / 2, 112);
+    display.print(buf);
+    display.setTextColor(COL_FG);
 }
 
 // ──────────────────────────────────────────────
 // Display: Speed-Bar
 // ──────────────────────────────────────────────
-void displaySpeedBar(uint8_t speed) {
+void displaySpeedBar(uint8_t speed, bool full = true) {   // full: wie displayTrimBar
     if (!dispOK) return;
-    dispClear();
-    dispTitle(S().speedTitle);
+    if (full) { dispClear(); dispTitle(S().speedTitle); }
 
     const int segW = 26, gap = 4, barH = 34, barY = 56;
     const int totalW = SPEED_STEPS * segW + (SPEED_STEPS - 1) * gap;
@@ -970,12 +1154,17 @@ void displaySpeedBar(uint8_t speed) {
     for (int i = 1; i <= SPEED_STEPS; i++) {
         int x = x0 + (i - 1) * (segW + gap);
         if (i <= (int)speed) display.fillRect(x, barY, segW, barH, COL_ACCENT);
-        else                 display.drawRect(x, barY, segW, barH, COL_DIM);
+        else { display.fillRect(x, barY, segW, barH, COL_BG);
+               display.drawRect(x, barY, segW, barH, COL_DIM); }
     }
 
     char buf[8];
-    snprintf(buf, sizeof(buf), "%d%%", speed * 10);
-    mkWatchdogCheckpoint(); dispCentered(buf, 112, 3, COL_FG);
+    snprintf(buf, sizeof(buf), "%3d%%", speed * 10);   // feste Breite, deckend
+    display.setTextSize(3);
+    display.setTextColor(COL_FG, COL_BG);
+    mkWatchdogCheckpoint(); display.setCursor((TFT_W - 4 * 18) / 2, 112);
+    display.print(buf);
+    display.setTextColor(COL_FG);
 }
 
 // ──────────────────────────────────────────────
@@ -1006,6 +1195,112 @@ void displayReset() {
     dispClear();
     dispTitle(S().resetTitle);
     mkWatchdogCheckpoint(); dispCentered(S().resetDone, 88, 2, COL_FG);
+}
+
+// ──────────────────────────────────────────────
+// Display: Auto-Update
+// ──────────────────────────────────────────────
+// Untermenue Firmware-Update — zwei Zeilen wie im Hauptmenue. full = mit
+// Schirm loeschen (beim Betreten), sonst nur die beiden Zeilen neu.
+void displaySubMenu(const char* title, const char* const* items, int count, int sel, bool full) {
+    if (!dispOK) return;
+    if (full) { dispClear(); dispTitle(title); }
+    for (int i = 0; i < count; i++) {
+        int y = 34 + i * LINE_H;
+        if (i == sel) {
+            dispHighlight(y, items[i], LINE_H);
+        } else {
+            display.fillRect(0, y, TFT_W, LINE_H, COL_BG);
+            display.setTextSize(2);
+            display.setTextColor(COL_FG);
+            mkWatchdogCheckpoint(); display.setCursor(6, y + (LINE_H - CH_H) / 2);
+            display.print(items[i]);
+        }
+    }
+}
+
+void displayFwMenu(bool full) {
+    displaySubMenu(S().menuItems[MI_FIRMWARE], S().fwTargets, 2, fwSel, full);
+}
+
+void displayCalMenu(bool full) {
+    displaySubMenu(S().menuItems[MI_CALIB], S().calItems, CI_COUNT, calSel, full);
+}
+
+// Aktionen der Kalibrierung kehren ins Untermenue zurueck, nicht ins Hauptmenue.
+void backToCalMenu() {
+    state = STATE_CAL_MENU;
+    displayCalMenu(true);
+}
+
+void displayOtaMsg2(const char* l1, const char* l2) {
+    if (!dispOK) return;
+    dispClear();
+    dispTitle(S().menuItems[MI_FIRMWARE]);
+    mkWatchdogCheckpoint(); dispCentered(l1, 72, 2, COL_FG);
+    mkWatchdogCheckpoint(); dispCentered(l2, 100, 2, COL_DIM);
+}
+
+// Kurze Meldung mit Titel — STATE_INFO kehrt danach ins Hauptmenue zurueck.
+void displayInfo(const char* title, const char* line) {
+    if (!dispOK) return;
+    dispClear();
+    dispTitle(title);
+    mkWatchdogCheckpoint(); dispCentered(line, 80, 2, COL_FG);
+}
+
+// Lenkung kalibrieren: Schritt-Text fest, darunter die aktuelle Pulsbreite —
+// nur die Zahl wird deckend ueberschrieben.
+void displayServoCal(bool full) {
+    if (!dispOK) return;
+    if (full) {
+        dispClear();
+        dispTitle(S().calItems[CI_STEERCAL]);
+        mkWatchdogCheckpoint(); dispCentered(S().scSteps[scStep], 48, 2, COL_FG);
+        mkWatchdogCheckpoint(); dispCentered(S().scHint, 146, 2, COL_DIM);
+    }
+    char buf[12];
+    snprintf(buf, sizeof(buf), "%4u us", (unsigned)scUs);
+    display.setTextSize(3);
+    display.setTextColor(COL_ACCENT, COL_BG);
+    mkWatchdogCheckpoint(); display.setCursor((TFT_W - 7 * 18) / 2, 90);
+    display.print(buf);
+    display.setTextColor(COL_FG);
+}
+
+void displayOtaConfirm() {
+    if (!dispOK) return;
+    dispClear();
+    dispTitle(S().menuItems[MI_FIRMWARE]);
+    mkWatchdogCheckpoint(); dispCentered(S().otaQuestion, 70, 2, COL_FG);
+    mkWatchdogCheckpoint(); dispCentered(S().otaConfirmHint, 120, 2, COL_DIM);
+}
+
+void displayOtaMsg(const char* msg) {
+    if (!dispOK) return;
+    dispClear();
+    dispTitle(S().menuItems[MI_FIRMWARE]);
+    mkWatchdogCheckpoint(); dispCentered(msg, 88, 2, COL_FG);
+}
+
+// Hostname fest, darunter die Wartezeit — nur die Zeit wird pro Sekunde
+// deckend ueberschrieben, kein Neuzeichnen des ganzen Schirms (Flackern).
+void displayOtaWait(bool full, uint32_t secs) {
+    if (!dispOK) return;
+    if (full) {
+        dispClear();
+        dispTitle(S().menuItems[MI_FIRMWARE]);
+        mkWatchdogCheckpoint(); dispCentered(S().otaWaiting, 44, 2, COL_FG);
+        mkWatchdogCheckpoint(); dispCentered(otaHost, 70, 2, COL_ACCENT);
+        mkWatchdogCheckpoint(); dispCentered(S().otaLeaveHint, 146, 2, COL_DIM);
+    }
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%lu:%02lu", (unsigned long)(secs / 60), (unsigned long)(secs % 60));
+    display.setTextSize(3);
+    display.setTextColor(COL_FG, COL_BG);
+    mkWatchdogCheckpoint(); display.setCursor((TFT_W - 4 * 18) / 2, 104);
+    display.print(buf);
+    display.setTextColor(COL_FG);
 }
 
 // ──────────────────────────────────────────────
@@ -1042,16 +1337,23 @@ int8_t jsMenuY(int16_t rawLY, int16_t rawRY) {
 int8_t jsMenuX(int16_t rawLX, int16_t rawRX) {
     unsigned long now = nowMs();
     if (now - lastMenuMove < MENU_COOLDOWN) return 0;
+    // Invertierte Kanäle um die Mitte spiegeln, damit rechts immer +1 ist
+    if (JS_INVERTED(JS_LEFT_X))  rawLX = 2 * JS_DEFAULT_CENTER - rawLX;
+    if (JS_INVERTED(JS_RIGHT_X)) rawRX = 2 * JS_DEFAULT_CENTER - rawRX;
     if (max(rawLX, rawRX) > JS_MENU_HIGH) { lastMenuMove = now; return  1; }
     if (min(rawLX, rawRX) < JS_MENU_LOW)  { lastMenuMove = now; return -1; }
     return 0;
 }
 
 void sendConfigPacket(int8_t trim, bool save);  // forward declaration (definiert im ESP-NOW-Block)
+void sendOtaRequest();
+void sendServoCal(uint8_t cmd, const uint16_t* us);
 
 // ──────────────────────────────────────────────
 // Display: Debug
 // ──────────────────────────────────────────────
+bool debugNeedsClear = true;
+
 void displayDebug(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
                   bool bY, bool bG, bool bB, bool bR) {
     if (!dispOK) return;
@@ -1063,10 +1365,11 @@ void displayDebug(int16_t lx, int16_t ly, int16_t rx, int16_t ry,
     // Stattdessen: nur beim Betreten einmal loeschen, danach mit deckendem Text
     // (Vorder- UND Hintergrundfarbe) die alten Zeichen direkt ueberschreiben.
     // Ohne das fuellt jeder Frame den Schirm schwarz — 5x pro Sekunde sichtbar.
-    static FBState c_state = STATE_READY;
-    bool fresh = (c_state != STATE_DEBUG);
-    c_state = state;
-    if (fresh) {
+    // debugNeedsClear setzt der Menuepunkt bei JEDEM Betreten — vorher merkte
+    // sich die Funktion das selbst und loeschte nur beim ersten Mal, ab dem
+    // zweiten blieb der Menue-Balken stehen.
+    if (debugNeedsClear) {
+        debugNeedsClear = false;
         dispClear();
         dispTitle("Debug");
     }
@@ -1121,60 +1424,60 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
             ledPink();
             int8_t dir = jsMenuY(rawLY, rawRY);
             if (dir) {
+                int oldSel = menuSel, oldScroll = menuScroll;
                 menuSel = constrain(menuSel + dir, 0, MENU_ITEM_COUNT - 1);
                 if (menuSel < menuScroll) menuScroll = menuSel;
                 if (menuSel >= menuScroll + MENU_VISIBLE) menuScroll = menuSel - MENU_VISIBLE + 1;
-                displayMenu();
+                if (menuSel != oldSel) displayMenuMove(oldSel, oldScroll);
             }
             if (bGreenP) {
                 switch (menuSel) {
-                    case 0: // Offset-Kalibrierung
-                        state = STATE_CAL_OFFSET_PULSE;
-                        stateStart = now;
-                        displayOffsetRelease();
+                    case MI_CALIB: // Untermenue Kalibrierung
+                        calSel = 0;
+                        state = STATE_CAL_MENU;
+                        displayCalMenu(true);
                         break;
-                    case 1: // Min/Max-Kalibrierung
-                        memcpy(jsMinTemp, jsMin, sizeof(jsMin));
-                        memcpy(jsMaxTemp, jsMax, sizeof(jsMax));
-                        calStep = 0;
-                        state = STATE_CAL_MINMAX;
-                        displayMinMaxStep(0);
-                        break;
-                    case 2: // Trim
-                        // Startwert ist der echte Trim des Autos aus dem Feedback
-                        trimOrig = feedback.trim;
-                        trimTemp = trimOrig;
-                        state = STATE_TRIM;
-                        displayTrimBar(trimTemp);
-                        break;
-                    case 3: // Speed
+                    case MI_SPEED: // Speed
                         speedTemp = maxSpeed;
                         state = STATE_SPEED;
                         displaySpeedBar(speedTemp);
                         break;
-                    case 4: // Sprache
+                    case MI_LANG: // Sprache
                         langTemp = langIndex;
                         state = STATE_LANGUAGE;
                         displayLanguage(langTemp);
                         break;
-                    case 5: // Rumble toggle (temporär, kein EEPROM)
+                    case MI_RUMBLE: // Rumble toggle (temporär, kein EEPROM)
                         rumbleEnabled = !rumbleEnabled;
-                        if (rumbleEnabled) rumbleFbEnd = nowMs() + 5000;
-                        displayMenu();
+                        if (rumbleEnabled) rumbleConfirmEnd = nowMs() + 5000;
+                        if (dispOK) { drawMenuRow(menuSel); drawMenuScrollbar(); }
                         break;
-                    case 6: // Joysticks tauschen (temporär, kein EEPROM)
+                    case MI_SWAP: // Joysticks tauschen (temporär, kein EEPROM)
                         swapSticks = !swapSticks;
-                        displayMenu();
+                        if (dispOK) { drawMenuRow(menuSel); drawMenuScrollbar(); }
                         break;
-                    case 7: // Debug
+                    case MI_FIRMWARE: // Firmware-Update → Untermenue Auto / Fernbedienung
+                        fwSel = 0;
+                        state = STATE_FW_MENU;
+                        displayFwMenu(true);
+                        break;
+                    case MI_DEBUG: // Debug
+                        debugNeedsClear = true;
                         state = STATE_DEBUG;
                         break;
-                    case 8: // Reset
+                    case MI_RESET: // Reset
                         resetSettings();
                         state = STATE_RESET;
                         stateStart = now;
                         displayReset();
                         break;
+                    case MI_EXIT: // Speichern & beenden — wie Rot. Gespeichert ist
+                             // ohnehin schon bei jeder Aenderung; der Eintrag
+                             // ist der sichtbare Ausgang fuer alle, die Rot
+                             // nicht trauen.
+                        state = STATE_READY;
+                        ledReady();
+                        return true;
                 }
             }
             if (bRedP) {
@@ -1198,16 +1501,17 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
         case STATE_CAL_OFFSET:
             if (!calDone) { calibrateOffset(); calDone = true; }
             ledYellow();
-            if (now - stateStart >= CAL_SHOW_MS) {
-                state = STATE_READY;
-                ledReady();
-            }
+            if (now - stateStart >= CAL_SHOW_MS) backToCalMenu();
             return false;
 
         case STATE_CAL_MINMAX:
             ledYellow();
             if (bGreenP) {
-                int16_t raw[4] = {rawLX, rawLY, rawRX, rawRY};
+                // Nach ADS-Kanal einsortieren — CAL_STEP_CH liefert Kanalnummern,
+                // nicht die Reihenfolge LX/LY/RX/RY der Variablen.
+                int16_t raw[4];
+                raw[JS_LEFT_X] = rawLX;  raw[JS_LEFT_Y] = rawLY;
+                raw[JS_RIGHT_X] = rawRX; raw[JS_RIGHT_Y] = rawRY;
                 int ch = CAL_STEP_CH[calStep];
                 if (CAL_STEP_ISMAX[calStep])
                     jsMaxTemp[ch] = raw[ch];
@@ -1217,31 +1521,28 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
                 if (calStep >= 8) {
                     memcpy(jsMin, jsMinTemp, sizeof(jsMin));
                     memcpy(jsMax, jsMaxTemp, sizeof(jsMax));
+                    normalizeMinMax();
                     saveSettings();
                     Serial.printf("[CAL-MM] min:%d %d %d %d  max:%d %d %d %d\n",
                         jsMin[0],jsMin[1],jsMin[2],jsMin[3],
                         jsMax[0],jsMax[1],jsMax[2],jsMax[3]);
-                    state = STATE_READY;
-                    ledReady();
+                    backToCalMenu();
                 } else {
                     displayMinMaxStep(calStep);
                 }
             }
-            if (bRedP) {
-                state = STATE_MENU;
-                displayMenu();
-            }
+            if (bRedP) backToCalMenu();
             return false;
 
         case STATE_TRIM: {
             int8_t dir = jsMenuX(rawLX, rawRX);
             if (dir) {
                 trimTemp = constrain(trimTemp + dir, TRIM_MIN, TRIM_MAX);
-                displayTrimBar(trimTemp);
+                displayTrimBar(trimTemp, false);
                 sendConfigPacket(trimTemp, false);   // Vorschau: Raeder bewegen sich sofort
             }
-            if (bGreenP) { sendConfigPacket(trimTemp, true);  feedback.trim = trimTemp; state = STATE_MENU; displayMenu(); }
-            if (bRedP)   { sendConfigPacket(trimOrig, false); state = STATE_MENU; displayMenu(); }
+            if (bGreenP) { sendConfigPacket(trimTemp, true);  feedback.trim = trimTemp; backToCalMenu(); }
+            if (bRedP)   { sendConfigPacket(trimOrig, false); backToCalMenu(); }
             return false;
         }
 
@@ -1249,7 +1550,7 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
             int8_t dir = jsMenuX(rawLX, rawRX);
             if (dir) {
                 speedTemp = constrain((int)speedTemp + dir, 1, SPEED_STEPS);
-                displaySpeedBar(speedTemp);
+                displaySpeedBar(speedTemp, false);
             }
             if (bGreenP) { maxSpeed = speedTemp; state = STATE_MENU; displayMenu(); }
             if (bRedP) { state = STATE_MENU; displayMenu(); }
@@ -1258,9 +1559,8 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
 
         case STATE_RESET:
             if (now - stateStart >= CAL_SHOW_MS) {
-                state = STATE_READY;
-                ledReady();
-                return true;  // sofort displayNormal aufrufen
+                state = STATE_MENU;   // jede Menue-Aktion endet im Hauptmenue
+                displayMenu();
             }
             return false;
 
@@ -1277,6 +1577,206 @@ bool handleState(bool bYellowP, bool bGreenP, bool bBlueP, bool bRedP,
 
         case STATE_DEBUG:
             if (bRedP) { state = STATE_MENU; displayMenu(); }
+            return false;
+
+        // ── Auto-Update ─────────────────────────────────────────────────────
+        // Waehrend aller OTA-States laeuft der Keepalive der Loop weiter
+        // (neutrale MSG_CONTROL). Das Auto hoert ihn nach seinem Neustart
+        // innerhalb seiner 5 s und bleibt dieser FB zugeordnet.
+        case STATE_CAL_MENU: {
+            ledPink();
+            int8_t dir = jsMenuY(rawLY, rawRY);
+            if (dir) {
+                int8_t n = constrain(calSel + dir, 0, CI_COUNT - 1);
+                if (n != calSel) { calSel = n; displayCalMenu(false); }
+            }
+            if (bGreenP) {
+                switch (calSel) {
+                    case CI_OFFSET: // Offset-Kalibrierung
+                        state = STATE_CAL_OFFSET_PULSE;
+                        stateStart = now;
+                        displayOffsetRelease();
+                        break;
+                    case CI_MINMAX: // Min/Max-Kalibrierung
+                        memcpy(jsMinTemp, jsMin, sizeof(jsMin));
+                        memcpy(jsMaxTemp, jsMax, sizeof(jsMax));
+                        calStep = 0;
+                        state = STATE_CAL_MINMAX;
+                        displayMinMaxStep(0);
+                        break;
+                    case CI_TRIM: // Trim
+                        // Startwert ist der echte Trim des Autos aus dem Feedback
+                        trimOrig = feedback.trim;
+                        trimTemp = trimOrig;
+                        state = STATE_TRIM;
+                        displayTrimBar(trimTemp);
+                        break;
+                    case CI_STEERCAL: // Lenkung kalibrieren
+                        if (!paired || reconnecting) {
+                            state = STATE_INFO;
+                            stateStart = now;
+                            displayInfo(S().calItems[CI_STEERCAL], S().otaNoCar);
+                        } else {
+                            scStep = 0;
+                            scUs   = 1500;
+                            state  = STATE_SERVO_CAL;
+                            displayServoCal(true);
+                        }
+                        break;
+                }
+            }
+            if (bRedP) { state = STATE_MENU; displayMenu(); }
+            return false;
+        }
+
+        case STATE_SERVO_CAL: {
+            ledYellow();
+            // Lenk-Stick wie beim Fahren (je nach "Joysticks tauschen")
+            int16_t m = swapSticks ? mapJS(rawLX, JS_LEFT_X) : mapJS(rawRX, JS_RIGHT_X);
+            float before = scUs;
+            scUs += (float)m * SC_RATE_US_PER_S / 100.0f * LOOP_PERIOD_MS / 1000.0f;
+            scUs = constrain(scUs, (float)MK_SERVO_HARD_MIN, (float)MK_SERVO_HARD_MAX);
+            uint16_t us = (uint16_t)scUs;
+            sendServoCal(SERVO_CAL_PREVIEW, &us);   // jede Runde, das Auto hat 300 ms Timeout
+            if ((uint16_t)before != us) displayServoCal(false);
+            if (bGreenP) {
+                // Schritte: links, rechts, geradeaus — gespeichert wird aber in
+                // der Protokoll-Reihenfolge links, mitte, rechts (MK_ServoCal.us)
+                static const uint8_t SC_SLOT[3] = {0, 2, 1};
+                scVals[SC_SLOT[scStep++]] = us;
+                if (scStep < 3) {
+                    displayServoCal(true);
+                } else {
+                    uint16_t lo = min(scVals[0], scVals[2]), hi = max(scVals[0], scVals[2]);
+                    bool ok = hi - lo >= MK_SERVO_MIN_SPAN && scVals[1] > lo && scVals[1] < hi;
+                    if (ok) {
+                        for (int i = 0; i < 3; i++) sendServoCal(SERVO_CAL_SAVE, scVals);
+                        feedback.trim = 0;   // das Auto setzt den Trim beim Speichern zurueck
+                    } else {
+                        sendServoCal(SERVO_CAL_CANCEL, scVals);
+                    }
+                    Serial.printf("[SERVO] links %u  mitte %u  rechts %u µs → %s\n",
+                                  scVals[0], scVals[1], scVals[2], ok ? "gespeichert" : "ungueltig");
+                    state = STATE_INFO;
+                    stateStart = now;
+                    displayInfo(S().calItems[CI_STEERCAL], ok ? S().scSaved : S().scInvalid);
+                }
+            }
+            if (bRedP) {
+                sendServoCal(SERVO_CAL_CANCEL, &us);
+                backToCalMenu();
+            }
+            return false;
+        }
+
+        case STATE_INFO:   // nur von "Lenkung kalibrieren" genutzt
+            if (now - stateStart >= 2500) backToCalMenu();
+            return false;
+
+        case STATE_FW_MENU: {
+            ledPink();
+            int8_t dir = jsMenuY(rawLY, rawRY);
+            if (dir) {
+                int8_t n = constrain(fwSel + dir, 0, 1);
+                if (n != fwSel) { fwSel = n; displayFwMenu(false); }
+            }
+            if (bGreenP) {
+                otaMsgToReady = false;
+                if (fwSel == 1) {
+                    // Fernbedienung: noch Platzhalter, Update per USB
+                    state = STATE_OTA_MSG;
+                    stateStart = now;
+                    displayOtaMsg2(S().fwFbLine1, S().fwFbLine2);
+                } else if (fbMode != MODE_DIRECT || !paired || reconnecting) {
+                    // Auto-Update nur im Direct Mode, das Auto muss antworten
+                    state = STATE_OTA_MSG;
+                    stateStart = now;
+                    displayOtaMsg(S().otaNoCar);
+                } else {
+                    state = STATE_OTA_CONFIRM;
+                    displayOtaConfirm();
+                }
+            }
+            if (bRedP) { state = STATE_MENU; displayMenu(); }
+            return false;
+        }
+
+        case STATE_OTA_CONFIRM:
+            ledPink();
+            if (bGreenP) {
+                otaStatusNew = false;
+                sendOtaRequest();
+                state = STATE_OTA_SEND;
+                stateStart = now;
+            }
+            if (bRedP) { state = STATE_FW_MENU; displayFwMenu(true); }
+            return false;
+
+        case STATE_OTA_SEND: {
+            ledPink();
+            const char* msg = nullptr;
+            if (otaStatusNew) {
+                otaStatusNew = false;
+                if (otaStatusRaw.state == OTA_ACCEPTED) {
+                    memcpy(otaHost, (const char*)otaStatusRaw.hostname, sizeof(otaHost));
+                    otaHost[sizeof(otaHost) - 1] = '\0';
+                    Serial.printf("[OTA] Auto im Update-Modus: %s.local\n", otaHost);
+                    // Funkstille des Autos ist jetzt gewollt: statt 30 s bis
+                    // MK_OTA_PARTNER_MS warten, erst dann gilt es als verloren.
+                    reconnecting       = true;
+                    reconnectStart     = now;
+                    reconnectLimit     = MK_OTA_PARTNER_MS;
+                    reconnectSkippable = false;
+                    state = STATE_OTA_WAIT;
+                    stateStart = now;
+                    displayOtaWait(true, 0);
+                    return false;
+                }
+                msg = (otaStatusRaw.state == OTA_REJ_BAT) ? S().otaRejBat : S().otaRejWifi;
+            } else if (now - stateStart > 1500) {
+                msg = S().otaNoReply;
+            }
+            if (msg) {
+                otaMsgToReady = false;
+                state = STATE_OTA_MSG;
+                stateStart = now;
+                displayOtaMsg(msg);
+            }
+            return false;
+        }
+
+        case STATE_OTA_WAIT: {
+            ledPink();
+            // Das Auto schickt nach der Zusage evtl. noch ein letztes Feedback —
+            // das ist nicht die Rueckkehr. Neustart + WLAN dauern ohnehin laenger.
+            if (!reconnecting) {
+                if (now - stateStart < 5000) {
+                    reconnecting = true;
+                } else {
+                    Serial.println("[OTA] Auto wieder verbunden");
+                    otaMsgToReady = true;
+                    state = STATE_OTA_MSG;
+                    stateStart = now;
+                    displayOtaMsg(S().otaBack);
+                    return false;
+                }
+            }
+            static uint32_t lastSecs = 0;
+            uint32_t secs = (now - stateStart) / 1000;
+            if (secs != lastSecs) { lastSecs = secs; displayOtaWait(false, secs); }
+            // Zurueck ins Menue: das Update laeuft weiter, die lange Wartezeit
+            // bleibt aktiv, bis das Auto sich meldet. Erst nach den 5 s oben,
+            // sonst koennte ein spaetes Feedback die Wartezeit beenden.
+            if (bRedP && now - stateStart >= 5000) { state = STATE_MENU; displayMenu(); }
+            return false;
+        }
+
+        case STATE_OTA_MSG:
+            if (now - stateStart >= 2500) {
+                if (otaMsgToReady) { state = STATE_MENU; displayMenu(); return false; }
+                state = STATE_FW_MENU;
+                displayFwMenu(true);
+            }
             return false;
     }
     return true;
@@ -1375,12 +1875,20 @@ void onDataRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
         pendingChannelSave = ch;
     } else if (msgType == MSG_MAPPING && len >= (int)sizeof(MK_Mapping)) {
         mappingSlot = ((const MK_Mapping*)data)->slot;
+    } else if (msgType == MSG_OTA_STATUS && len >= (int)sizeof(MK_OtaStatus)
+               && memcmp(senderMac, peerMac, 6) == 0) {
+        memcpy(&otaStatusRaw, data, sizeof(MK_OtaStatus));
+        otaStatusNew = true;
     }
 }
 
 void onEspNowSent(const esp_now_send_info_t*, esp_now_send_status_t);
 
 void initEspNow() {
+    // Vor dem Funkstart: die Bibliothek setzt beim STA_START-Ereignis den
+    // Stromsparmodus selbst auf WiFi.getSleep() — kaeme das nach unserem
+    // esp_wifi_set_ps() unten an, waere Modem-Sleep doch wieder an.
+    WiFi.setSleep(false);
     WiFi.mode(WIFI_STA);
     // Kein Modem-Sleep: mit dem SYSTIMER-Fehler (mk_clock_guard.h) kann der
     // Funk-Stack sonst in einen Watchdog-Absturz laufen. Ohne Router-Verbindung
@@ -1413,6 +1921,7 @@ void initEspNow() {
         reconnecting   = true;
         reconnectStart = nowMs();
         reconnectLimit = RECONNECT_BOOT_MS;
+        reconnectSkippable = true;
         lastFeedbackMs = nowMs();
         Serial.printf("[ESPNOW] Direct: melde mich bei %02X:%02X:%02X:%02X:%02X:%02X auf Kanal %d\n",
             carMac[0], carMac[1], carMac[2], carMac[3], carMac[4], carMac[5], savedCh);
@@ -1454,19 +1963,32 @@ void espNowSendWait(const uint8_t* mac, const uint8_t* data, size_t len) {
     while (!espNowSentFlag && nowMs() - t0 < 10) delay(1);
 }
 
+// Gespeichertes Auto vergessen und neu starten — die FB sucht danach auf Kanal 1.
+void forgetCarAndRestart() {
+    uint8_t zero = 0;
+    uint8_t noMac[6] = {};
+    EEPROM.put(EEPROM_ADDR_CHANNEL, zero);
+    EEPROM.put(EEPROM_ADDR_CARMAC, noMac);
+    mkWatchdogStop();   // Neustart folgt ohnehin
+    EEPROM.commit();
+    ESP.restart();
+}
+
+// Die Neustarts unten (Rueckfall auf Kanal 1) nicht mitten im Menue oder in
+// der Kalibrierung — sonst schliesst sich das Menue scheinbar von selbst. Sie
+// holen das nach, sobald das Menue verlassen ist.
+static bool restartAllowed() {
+    return state == STATE_READY || state == STATE_OTA_WAIT;
+}
+
 void handlePairing() {
-    if (reconnecting && nowMs() - reconnectStart > reconnectLimit) {
-        uint8_t zero = 0;
-        uint8_t noMac[6] = {};
-        EEPROM.put(EEPROM_ADDR_CHANNEL, zero);
-        EEPROM.put(EEPROM_ADDR_CARMAC, noMac);
-        mkWatchdogStop();   // Neustart folgt ohnehin
-        EEPROM.commit();
+    if (reconnecting && nowMs() - reconnectStart > reconnectLimit && restartAllowed()) {
         Serial.printf("[ESPNOW] %lus kein Feedback vom Auto → Reboot auf Kanal 1\n",
                       reconnectLimit / 1000);
-        ESP.restart();
+        forgetCarAndRestart();
     }
-    if (trySavedChannel && !paired && nowMs() - savedChannelStart > SAVED_CHANNEL_TIMEOUT_MS) {
+    if (trySavedChannel && !paired && nowMs() - savedChannelStart > SAVED_CHANNEL_TIMEOUT_MS
+            && restartAllowed()) {
         uint8_t zero = 0;
         EEPROM.put(EEPROM_ADDR_CHANNEL, zero);
         mkWatchdogStop();   // Neustart folgt ohnehin
@@ -1544,6 +2066,25 @@ void sendControlInput(int8_t throttle, int8_t steering,
     esp_now_send(peerMac, (uint8_t*)&pkt, sizeof(pkt));
 }
 
+// Auto in den Update-Modus schicken. 3× — einzelne Pakete gehen verloren,
+// das Auto wertet nur den ersten aus (danach ist es im WLAN).
+void sendOtaRequest() {
+    if (!paired) return;
+    MK_OtaRequest pkt;
+    for (int i = 0; i < 3; i++) espNowSendWait(peerMac, (const uint8_t*)&pkt, sizeof(pkt));
+    Serial.println("[OTA] Request gesendet");
+}
+
+void sendServoCal(uint8_t cmd, const uint16_t* us) {
+    if (!paired) return;
+    MK_ServoCal pkt;
+    pkt.cmd = cmd;
+    pkt.us[0] = us[0];
+    pkt.us[1] = (cmd == SERVO_CAL_SAVE) ? us[1] : 0;
+    pkt.us[2] = (cmd == SERVO_CAL_SAVE) ? us[2] : 0;
+    esp_now_send(peerMac, (const uint8_t*)&pkt, sizeof(pkt));
+}
+
 void sendConfigPacket(int8_t trim, bool save) {
     if (!paired) return;
     MK_ConfigPacket pkt;
@@ -1567,6 +2108,7 @@ void handleFeedback() {
         lastFeedbackMs = nowMs();
         if (reconnecting) {
             reconnecting = false;
+            reconnectSkippable = false;
             Serial.println("[ESPNOW] Direct: Auto antwortet — wieder verbunden");
         }
         if (rumbleCmd == 1) rumbleFbEnd = nowMs() + 200;  // 200ms Safety-Timeout falls rumble=0 verloren geht
@@ -1582,6 +2124,7 @@ void handleFeedback() {
             reconnecting   = true;
             reconnectStart = nowMs();
             reconnectLimit = RECONNECT_LOST_MS;
+            reconnectSkippable = false;   // im Betrieb nicht: Tasten fahren das Auto
             rumbleFbEnd    = 0;
         } else {
             enterSearchState();
@@ -1594,7 +2137,9 @@ void handleRumbleFb() {
         ledcWrite(PIN_RUMBLE, 0);
         return;
     }
-    ledcWrite(PIN_RUMBLE, (nowMs() < rumbleFbEnd) ? RUMBLE_PWM : 0);
+    uint32_t now = nowMs();
+    bool on = now < rumbleFbEnd || now < rumbleConfirmEnd;
+    ledcWrite(PIN_RUMBLE, on ? RUMBLE_PWM : 0);
 }
 
 // Warmstart = Reset ohne Stromunterbrechung (Watchdog, Absturz, ESP.restart(),
@@ -1624,6 +2169,7 @@ void setup() {
     gpio_hold_dis((gpio_num_t)PIN_RUMBLE);
     gpio_hold_dis((gpio_num_t)PIN_LED);
     const bool warm = isWarmBoot();
+    Serial.printf("[BOARD] FB V%d\n", FB_REV);
     Serial.printf("[RESET] reason=%d (%s)\n", (int)esp_reset_reason(),
                   warm ? "Warmstart" : "Kaltstart");
     pinMode(PIN_BTN_YELLOW, INPUT_PULLUP);
@@ -1781,6 +2327,7 @@ void loop() {
     prevBlue   = bBlue;
     prevRed    = bRed;
 
+
     // Letzter bekannter Wert bleibt erhalten wenn ein Kanal gerade nicht gelesen wird
     static int16_t rawLX = 0, rawLY = 0, rawRX = 0, rawRY = 0;
     // false = ADS1115 hat in dieser Runde nicht sauber geantwortet → neutral
@@ -1800,6 +2347,18 @@ void loop() {
             }
             if (swapSticks) { nRY = sumA / ADC_OVERSAMPLE; nLX = sumB / ADC_OVERSAMPLE; }
             else            { nLY = sumA / ADC_OVERSAMPLE; nRX = sumB / ADC_OVERSAMPLE; }
+            // Gegencheck: einen der beiden ungenutzten Kanaele mitlesen (im
+            // Wechsel). Drei Kanaele mit exakt gleichem Wert = ADS misst nicht.
+            static bool alt = false;
+            alt = !alt;
+            uint8_t chC = swapSticks ? (alt ? JS_LEFT_Y : JS_RIGHT_X)
+                                     : (alt ? JS_LEFT_X : JS_RIGHT_Y);
+            int16_t vC = ads.readADC_SingleEnded(chC);
+            int16_t vA = swapSticks ? nRY : nLY, vB = swapSticks ? nLX : nRX;
+            if (vA == vB && vB == vC) {
+                Serial.printf("[STICK] A%u/A%u/A%u liefern alle %d — ADS haengt\n", chA, chB, chC, vA);
+                i2cCycleOk = false;
+            }
         } else {
             // Menü/Kalibrierung: alle 4 Kanäle für Navigation und Kalibrierung
             nLX = ads.readADC_SingleEnded(JS_LEFT_X);
@@ -1811,6 +2370,13 @@ void loop() {
         // Werte nicht. Single-ended liefert nie deutlich negative Counts.
         if (i2cCycleOk && (!adsAlive() || nLX < -200 || nLY < -200 || nRX < -200 || nRY < -200))
             i2cCycleOk = false;
+        // Nur im Fahrbetrieb: in der Kalibrierung duerfen Werte ueber den
+        // bisherigen Anschlag hinausgehen, genau die sollen ja gemessen werden.
+        if (i2cCycleOk && state == STATE_READY) {
+            bool okA = swapSticks ? stickInRange(JS_RIGHT_Y, nRY) : stickInRange(JS_LEFT_Y, nLY);
+            bool okB = swapSticks ? stickInRange(JS_LEFT_X,  nLX) : stickInRange(JS_RIGHT_X, nRX);
+            if (!okA || !okB) i2cCycleOk = false;
+        }
         if (i2cCycleOk) {
             rawLX = nLX; rawLY = nLY; rawRX = nRX; rawRY = nRY;
         } else {
@@ -1891,10 +2457,45 @@ void loop() {
         }
     }
 
+    FBState stateBefore = state;   // Taste, die im Menue beginnt, geht nie ans Auto
     bool active = handleState(bYellowP, bGreenP, bBlueP, bRedP, bGreen, bBlue, rawLX, rawLY, rawRX, rawRY);
 
+    // Tasten fuers Auto: nur einzeln gedrueckte, und erst beim Loslassen.
+    // Sonst loest der Menue-Griff (Gruen + Blau) jedes Mal den Stern aus —
+    // Gruen kommt fast immer einen Moment vor Blau an. Ein Griff zaehlt nicht,
+    // sobald eine zweite Taste dazukommt oder er ausserhalb des Normalbetriebs
+    // lag (Menue verlassen mit Rot schaltet sonst beim Loslassen das Licht).
+    // Das Bit bleibt TAP_PACKETS Pakete gesetzt, damit ein verlorenes Paket
+    // die Flanke nicht verschluckt.
+    static const uint8_t TAP_PACKETS = 3;
+    static uint8_t chordMask  = 0;       // alle Tasten seit dem ersten Druck
+    static bool    chordValid = true;
+    static uint8_t tapMask    = 0;
+    static uint8_t tapLeft    = 0;
+    uint8_t held = (bYellow ? MK_BTN_YELLOW : 0) | (bGreen ? MK_BTN_GREEN : 0)
+                 | (bBlue ? MK_BTN_BLUE : 0) | (bRed ? MK_BTN_RED : 0);
+    if (held) {
+        if (!chordMask) chordValid = true;
+        chordMask |= held;
+        if (state != STATE_READY || stateBefore != STATE_READY) chordValid = false;
+    } else if (chordMask) {
+        bool single = (chordMask & (chordMask - 1)) == 0;
+        if (single && chordValid && state == STATE_READY) { tapMask = chordMask; tapLeft = TAP_PACKETS; }
+        chordMask = 0;
+    }
+    // Suche nach dem gespeicherten Auto direkt nach dem Boot per Taste abbrechen.
+    // Ueber den Tap (einzelne Taste, beim Loslassen, im Normalbetrieb) — sonst
+    // braeche schon das erste Gruen des Menue-Griffs Gruen+Blau die Suche ab.
+    if (tapLeft == TAP_PACKETS && reconnecting && reconnectSkippable) {
+        Serial.println("[ESPNOW] Suche per Taste abgebrochen → Reboot auf Kanal 1");
+        forgetCarAndRestart();
+    }
+    if (tapLeft == TAP_PACKETS)
+        Serial.printf("[TAP] Taste 0x%02X ans Auto (Zustand %d)\n", tapMask, (int)state);
+    uint8_t sendMask = tapLeft ? tapMask : 0;
+    if (tapLeft) tapLeft--;
+
     if (active) {
-        // Default: LY→throttle, RX→steering  |  Swapped: RY→throttle, LX→steering
         int8_t throttle = swapSticks ? mapJS(rawRY, JS_RIGHT_Y) : mapJS(rawLY, JS_LEFT_Y);
         int8_t steering = swapSticks ? mapJS(rawLX, JS_LEFT_X)  : mapJS(rawRX, JS_RIGHT_X);
 
@@ -1908,11 +2509,12 @@ void loop() {
         // Achsen/Buttons jede Loop-Runde (~50 Zeilen/s) — nur zum Debuggen.
         // Standardmaessig aus: der Dauerverkehr ueber USB-Serial/JTAG steht im
         // Verdacht, den SYSTIMER-Fehler des C6 (mk_clock_guard.h) zu haeufen.
-        Serial.printf("LX:%6d | LY:%6d | RX:%6d | RY:%6d | Y:%d G:%d B:%d R:%d | thr:%4d str:%4d\n",
-            rawLX, rawLY, rawRX, rawRY, bYellow, bGreen, bBlue, bRed, throttle, steering);
+        Serial.printf("LX:%6d | LY:%6d | RX:%6d | RY:%6d | Y:%d G:%d B:%d R:%d | thr:%4d str:%4d | swap:%d\n",
+            rawLX, rawLY, rawRX, rawRY, bYellow, bGreen, bBlue, bRed, throttle, steering, swapSticks);
 #endif
 
-        sendControlInput(throttle, steering, bYellow, bGreen, bBlue, bRed);
+        sendControlInput(throttle, steering, sendMask & MK_BTN_YELLOW, sendMask & MK_BTN_GREEN,
+                         sendMask & MK_BTN_BLUE, sendMask & MK_BTN_RED);
 
         static int8_t prevMappingSlot = -2;
         if (mappingSlot >= 1) {

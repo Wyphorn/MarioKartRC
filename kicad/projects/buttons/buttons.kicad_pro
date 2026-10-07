@@ -60,7 +60,7 @@
           "hatch_smoothing_level": 0,
           "hatch_smoothing_value": 0.1,
           "hatch_thickness": 1.0,
-          "min_clearance": 0.0,
+          "min_clearance": 0.5,
           "min_island_area": 10.0,
           "min_thickness": 0.25,
           "pad_connection": 1,
@@ -70,20 +70,7 @@
         }
       },
       "diff_pair_dimensions": [],
-      "drc_exclusions": [
-        [
-          "silk_overlap|90831429|59214819|27ca1ec0-04bc-4aa7-b099-9484e5890a7d|d4e3914c-f005-419d-9fbb-4a85ea518aaa",
-          ""
-        ],
-        [
-          "starved_thermal|81100000|60900000|7850e492-8fd0-4a56-a2b5-783a316b2609|2dae9801-dd2f-456a-ba9e-d3ba016758ad|F.Cu",
-          ""
-        ],
-        [
-          "starved_thermal|81100000|67400000|7850e492-8fd0-4a56-a2b5-783a316b2609|20f0051c-53d1-47ac-988f-7b0ea3bbb7a9|F.Cu",
-          ""
-        ]
-      ],
+      "drc_exclusions": [],
       "meta": {
         "version": 2
       },
@@ -253,7 +240,7 @@
       "internal_id": "",
       "mfg": "",
       "mpn": "",
-      "sch_revision": "0.9"
+      "sch_revision": "1"
     },
     "layer_pairs": [],
     "layer_presets": [],
@@ -273,12 +260,7 @@
     "equivalence_files": []
   },
   "erc": {
-    "erc_exclusions": [
-      [
-        "duplicate_pins|1003300|635000|4ecb78f2-7c4c-425b-bd24-88e3e9b83712|f9ac2067-19b8-484d-a92c-8173a112d4a4|/07e15924-1c01-44c0-be05-6775a71cea6e|/07e15924-1c01-44c0-be05-6775a71cea6e|/07e15924-1c01-44c0-be05-6775a71cea6e",
-        ""
-      ]
-    ],
+    "erc_exclusions": [],
     "meta": {
       "version": 0
     },
@@ -503,12 +485,10 @@
   },
   "libraries": {
     "pinned_footprint_libs": [],
-    "pinned_symbol_libs": [
-      "zzzz_Own"
-    ]
+    "pinned_symbol_libs": []
   },
   "meta": {
-    "filename": "kart.kicad_pro",
+    "filename": "buttons.kicad_pro",
     "version": 3
   },
   "net_settings": {
@@ -526,26 +506,11 @@
         "pcb_color": "rgba(0, 0, 0, 0.000)",
         "priority": 2147483647,
         "schematic_color": "rgba(0, 0, 0, 0.000)",
-        "track_width": 0.25,
+        "track_width": 0.2,
         "tuning_profile": "",
         "via_diameter": 0.6,
         "via_drill": 0.3,
         "wire_width": 6
-      },
-      {
-        "clearance": 0.2,
-        "diff_pair_gap": 0.25,
-        "diff_pair_width": 0.2,
-        "microvia_diameter": 0.3,
-        "microvia_drill": 0.1,
-        "name": "Power",
-        "pcb_color": "rgba(0, 0, 0, 0.000)",
-        "priority": 0,
-        "schematic_color": "rgba(0, 0, 0, 0.000)",
-        "track_width": 0.5,
-        "tuning_profile": "",
-        "via_diameter": 0.6,
-        "via_drill": 0.3
       }
     ],
     "meta": {
@@ -553,30 +518,13 @@
     },
     "net_colors": null,
     "netclass_assignments": null,
-    "netclass_patterns": [
-      {
-        "netclass": "Default",
-        "pattern": ""
-      },
-      {
-        "netclass": "Power",
-        "pattern": "+3V3"
-      },
-      {
-        "netclass": "Power",
-        "pattern": "+5V"
-      },
-      {
-        "netclass": "Default",
-        "pattern": "+BATT"
-      }
-    ]
+    "netclass_patterns": []
   },
   "pcbnew": {
     "last_paths": {
       "idf": "",
       "netlist": "",
-      "plot": "gerber/kart/",
+      "plot": "",
       "specctra_dsn": "",
       "step": "",
       "vrml": ""
@@ -642,6 +590,18 @@
         },
         {
           "group_by": true,
+          "label": "Exclude from Simulation",
+          "name": "${EXCLUDE_FROM_SIM}",
+          "show": true
+        },
+        {
+          "group_by": true,
+          "label": "Exclude from Position Files",
+          "name": "${EXCLUDE_FROM_POS_FILES}",
+          "show": true
+        },
+        {
+          "group_by": true,
           "label": "Footprint",
           "name": "Footprint",
           "show": true
@@ -658,7 +618,7 @@
       "include_excluded_from_bom": true,
       "name": "Default Editing",
       "sort_asc": true,
-      "sort_field": "Referenz"
+      "sort_field": "Reference"
     },
     "bus_aliases": {},
     "connection_grid_size": 50.0,
@@ -696,18 +656,18 @@
     "subpart_id_separator": 0,
     "top_level_sheets": [
       {
-        "filename": "kart.kicad_sch",
-        "name": "Stammblatt",
-        "uuid": "07e15924-1c01-44c0-be05-6775a71cea6e"
+        "filename": "buttons.kicad_sch",
+        "name": "Root",
+        "uuid": "42e83be4-83c3-4979-811e-d33b83459897"
       }
     ],
-    "used_designators": "#PWR1-49,51k1,20k1,TP1-4,47k1,Q1-3,#FLG1-2,U1-6,3\\,3k1,D1-2,J1-9,1k1,C1-4,100k1,SW1,R1-7,M1,L1-2,10k1-4",
+    "used_designators": "#FLG1,#PWR1,yellow1,red1,green1,J1,blue1,SW1-5",
     "variants": []
   },
   "sheets": [
     [
-      "07e15924-1c01-44c0-be05-6775a71cea6e",
-      "Stammblatt"
+      "42e83be4-83c3-4979-811e-d33b83459897",
+      "Root"
     ]
   ],
   "text_variables": {},

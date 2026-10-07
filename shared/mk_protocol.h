@@ -22,6 +22,10 @@ enum MK_MsgType : uint8_t {
     MSG_HUNTER_TAG     = 0x15,   // Auto (Jäger) → Basis (Unicast) — Jäger meldet vermutliches Opfer
     MSG_HUNTER_STATE   = 0x16,   // Basis → Broadcast — offizieller neuer Jäger (autoritativ)
     MSG_HUNTER_SCORES  = 0x17,   // Basis → Broadcast (alle FBs) — Spielerliste + Jäger-Zeiten für Display
+
+    MSG_OTA_REQUEST    = 0x18,   // FB → Auto (Direct) | Basis → Auto (Game) — Auto in den Update-Modus
+    MSG_OTA_STATUS     = 0x19,   // Auto → FB / Basis (Unicast) — Antwort auf MSG_OTA_REQUEST
+    MSG_SERVO_CAL      = 0x1A,   // FB → Auto (Direct) | FB → Basis → Auto — Lenkung kalibrieren
 };
 
 // ── Device types ─────────────────────────────────────────────────────────────
@@ -55,9 +59,10 @@ enum MK_DeviceType : uint8_t {
 //   MSG_CONTROL to the persisted car MAC; the car's MSG_FEEDBACK confirms the
 //   link. The car keeps its pairing on link loss (restored from EEPROM after
 //   its own reboot) and only falls back to MK_ESPNOW_CHANNEL after 30s of
-//   silence (5s right after boot). FB gives up after 15s after boot (car boot takes ~10s), 30s after
-//   a runtime loss. Channel 1 is avoided on purpose: there the first FB wins,
-//   so every fallback may change the FB↔car assignment.
+//   silence (5s right after boot). FB gives up after 5s after boot (the user
+//   can skip even that with any button), 30s after a runtime loss. Channel 1
+//   is avoided on purpose: there the first FB wins, so every fallback may
+//   change the FB↔car assignment.
 //   No race-end reset needed — each new pairing picks a fresh random channel.
 
 #define MK_ESPNOW_CHANNEL  1        // Fixed registration/setup channel — NEVER used as race channel.
@@ -122,6 +127,7 @@ struct MK_IrConfig {
 // Axis mapping (swap) and trim are applied on the FB/car side — not transmitted.
 // Default mapping: LY → throttle, RX → steering.
 // Swapped mapping: RY → throttle, LX → steering (set in FB settings menu).
+// Welcher ADS-Kanal welche Stick-Richtung ist, steht in fb-firmware (JS_*-Defines).
 // Receiver MUST implement a timeout (~200ms): if no packet arrives, set throttle=0.
 // The FB stops sending when it detects connection loss — the car must not keep
 // the last known throttle active indefinitely.
@@ -136,6 +142,10 @@ struct MK_ControlInput {
     int8_t  throttle;     // -100..100  (forward/backward)
     int8_t  steering;     // -100..100  (left/right)
     uint8_t buttons;      // Bitmask: MK_BTN_YELLOW | MK_BTN_GREEN | MK_BTN_BLUE | MK_BTN_RED
+                          // Tastendruck-Ereignis, nicht Haltezustand: die FB setzt ein
+                          // Bit erst beim LOSLASSEN einer einzeln gedrueckten Taste,
+                          // für 3 Pakete. Mehrtasten-Griffe (Menue: Gruen+Blau) erscheinen
+                          // nie. Empfaenger reagieren auf die steigende Flanke.
     uint8_t maxSpeed;     // Player preference 1-10 (game may override)
 };
 
@@ -152,8 +162,40 @@ struct MK_ControlInput {
 
 struct MK_ConfigPacket {
     uint8_t type = MSG_CONFIG;
-    int8_t  trim;         // Servo trim -10..10, stored in car EEPROM
+    int8_t  trim;         // Servo trim -10..10, stored in car EEPROM.
+                          // Eine Stufe = MK_TRIM_STEP_US, verschiebt die kalibrierte Mitte.
     uint8_t save = 1;     // 1 = persist in car EEPROM, 0 = apply only (preview)
+};
+#define MK_TRIM_STEP_US  15   // vorher 5 µs — kaum sichtbar (2026-10-04)
+
+// ── Lenkung kalibrieren (FB-Menü) ────────────────────────────────────────────
+// Der Servo meldet seine Position nicht. Der Fahrer stellt deshalb mit dem
+// Lenk-Stick nacheinander den linken Anschlag, den rechten Anschlag und
+// geradeaus ein (FB: Stick gibt die Geschwindigkeit vor, nicht die Position)
+// und bestätigt jeweils. Währenddessen schickt die FB SERVO_CAL_PREVIEW mit der
+// gewünschten Pulsbreite; das Auto fährt den Servo direkt dorthin, solange
+// Previews kommen (Timeout MK_SERVO_PREVIEW_MS, danach wieder normale Lenkung).
+// Am Ende SERVO_CAL_SAVE mit allen drei Werten; das Auto prüft und speichert sie
+// im EEPROM. Danach bildet es Stick -100..0..100 auf links..mitte..rechts ab,
+// der Trim verschiebt die Mitte innerhalb der Anschläge.
+// Game Mode: die Basis reicht das Paket wie MK_ConfigPacket unverändert ans Auto.
+// Harte Grenzen unabhängig von allem: MK_SERVO_HARD_MIN/MAX.
+
+#define MK_SERVO_HARD_MIN     900
+#define MK_SERVO_HARD_MAX     2100
+#define MK_SERVO_MIN_SPAN     300    // links↔rechts mindestens so weit auseinander
+#define MK_SERVO_PREVIEW_MS   300
+
+enum MK_ServoCalCmd : uint8_t {
+    SERVO_CAL_PREVIEW = 1,   // us[0] anfahren (Live-Vorschau)
+    SERVO_CAL_SAVE    = 2,   // us[0..2] = links, mitte, rechts speichern
+    SERVO_CAL_CANCEL  = 3,   // Vorschau sofort beenden
+};
+
+struct MK_ServoCal {
+    uint8_t  type = MSG_SERVO_CAL;
+    uint8_t  cmd;            // MK_ServoCalCmd
+    uint16_t us[3];          // Pulsbreiten in µs
 };
 
 // ── Auto → FB / Basis → FB ───────────────────────────────────────────────────
@@ -285,6 +327,62 @@ struct MK_HunterScores {
     uint8_t  type = MSG_HUNTER_SCORES;
     uint8_t  hunterSlot;        // 1–8: aktueller offizieller Jäger
     uint16_t secondsPerSlot[8]; // kumulierte Jäger-Sekunden, Index = Slot-1; Sieger = niedrigster Wert
+};
+
+// ── Firmware-Update über WLAN (OTA) ───────────────────────────────────────────
+// Das Auto hat keine Tasten und steckt zum Flashen im Chassis. Deshalb schickt
+// es sein Partner in den Update-Modus: im Direct Mode die FB (Menüpunkt
+// „Firmware-Update → Auto"), im Game Mode später die Basis.
+//
+//   1. Partner → Auto: MK_OtaRequest (confirm = MK_OTA_CONFIRM). Das Auto nimmt
+//      ihn NUR von seinem gepairten Partner an (Absender == baseMac) — eine
+//      fremde FB kann kein fremdes Auto umschalten. Der Partner sendet 3×,
+//      einzelne Pakete gehen verloren.
+//   2. Auto → Partner: MK_OtaStatus. OTA_ACCEPTED mit Hostname, sonst Grund der
+//      Ablehnung. Kommt keine Antwort (1.5 s), gilt das Auto als nicht erreichbar.
+//   3. Auto: Motor aus, Servo Mitte, Licht/IR aus. Nur die Status-LED zeigt
+//      den Modus: lila blinkend = meldet sich am WLAN an, lila dauerhaft = im
+//      WLAN und bereit, rot blinkend = Abbruch, Neustart folgt.
+//      ESP-NOW aus, Anmeldung am WLAN (SSID/Passwort in mk_secrets.h), dann
+//      ArduinoOTA unter <hostname>.local, Port 3232, ohne Passwort. Den Schutz
+//      gibt das Zeitfenster: Firmware wird nur im Update-Modus angenommen.
+//   4. Abbruch mit Neustart: kein WLAN nach MK_OTA_WIFI_MS, keine Firmware nach
+//      MK_OTA_WAIT_MS, Fehler beim Empfang. Nach erfolgreichem Update ebenfalls
+//      Neustart. Ein abgebrochener Download ändert nichts: umgeschaltet wird
+//      erst nach geprüfter Prüfsumme, sonst startet die alte Firmware.
+//   5. Nach dem Neustart holt das Auto sein Pairing aus dem EEPROM. Der Partner
+//      sendet während des ganzen Updates weiter neutrale MSG_CONTROL auf dem
+//      Betriebskanal — so hört das Auto ihn innerhalb seiner 5 s nach dem Boot
+//      und bleibt ihm zugeordnet. Der Partner wartet bis MK_OTA_PARTNER_MS.
+//
+// Im Update-Modus gibt der WLAN-Access-Point den Funkkanal vor, ESP-NOW ruht.
+// Später strahlt die Basis (RPi5) das WLAN aus.
+//
+// PC: pio run -e car_ota -t upload --upload-port <hostname>.local
+//     (Kart-Board V2: -e car_v2_ota)
+
+#define MK_OTA_CONFIRM     0xA5      // Schutz gegen versehentliches Auslösen
+#define MK_OTA_WIFI_MS     20000     // Auto: WLAN-Anmeldung, sonst Neustart
+#define MK_OTA_WAIT_MS     90000     // Auto: auf Firmware warten (1.5 min), sonst Neustart.
+                                     // Ein Upload dauert ~15 s (2026-10-04, vorher 5 min)
+#define MK_OTA_PARTNER_MS  150000    // FB/Basis: auf die Rückkehr des Autos warten (2.5 min):
+                                     // WLAN 20 s + Warten 90 s + Upload/Neustart + Reserve
+
+enum MK_OtaState : uint8_t {
+    OTA_ACCEPTED   = 1,   // Auto wechselt ins WLAN, hostname gültig
+    OTA_REJ_BAT    = 2,   // abgelehnt: Akku zu leer für ein sicheres Update
+    OTA_REJ_NOWIFI = 3,   // abgelehnt: Firmware ohne WLAN-Zugangsdaten gebaut
+};
+
+struct MK_OtaRequest {
+    uint8_t type    = MSG_OTA_REQUEST;
+    uint8_t confirm = MK_OTA_CONFIRM;
+};
+
+struct MK_OtaStatus {
+    uint8_t type  = MSG_OTA_STATUS;
+    uint8_t state;          // MK_OtaState
+    char    hostname[24];   // z.B. "kart-mario-b924", nullterminiert; nur bei OTA_ACCEPTED
 };
 
 // ── Base station architecture (multi-S3) ─────────────────────────────────────

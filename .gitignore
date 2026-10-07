@@ -2,6 +2,15 @@
 *.pyc
 __pycache__/
 .DS_Store
+.vscode/
+
+# Interne Arbeitsnotizen (Claude), nicht öffentlich
+CLAUDE.md
+
+# Vorläufiges und Exporte im Hauptordner
+/*.pdf
+/*.docx
+*.rpt
 
 # KiCad: Locks, Sicherungen, lokale Ansichtseinstellungen
 *.lck
@@ -11,6 +20,9 @@ __pycache__/
 fp-info-cache
 _restore_backup_*/
 .history/
-# Gerber nur als ZIP fuer den Fertiger, entpackte Kopien nicht
-docs/kart/gerber/controller/
-docs/kart/gerber/kart/
+*-backups/
+# Gerber nur als ZIP für den Fertiger, entpackte Kopien nicht
+kicad/projects/*/gerber/*/
+
+# WLAN-Zugangsdaten (Vorlage: shared/mk_secrets.example.h)
+shared/mk_secrets.h

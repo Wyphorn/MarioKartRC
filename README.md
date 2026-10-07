@@ -13,7 +13,9 @@ Das Projekt ist auf Nachbau ausgelegt: Alle Bauteile haben eine feste Bestellnum
 | `fb-firmware/` | Fernbedienung – ESP32-C6-SuperMini, PlatformIO |
 | `car-firmware/` | Fahrzeug – ESP32-C6 Mini, PlatformIO |
 | `shared/` | Gemeinsamer Code: `mk_protocol.h` (Pakete FB ↔ Auto ↔ Basis), `mk_clock_guard.h` (Workaround für den C6-Uhrenfehler) |
-| `docs/kart/` | KiCad: `kart.*` (Fahrzeug-Board), `controller.*` (Fernbedienung), eigene Symbole/Footprints (`zzzz_Own`), Gerber als ZIP |
+| `kicad/projects/` | KiCad-Projekte je Platine: `kart` (Fahrzeug-Board), `controller` (Fernbedienung), `buttons` (Tasterplatine FB), `switch` (Schalter-Platinchen Kart), jeweils mit Gerber als ZIP |
+| `kicad/libs/` | Eigene Symbole und Footprints (`zzzz_Own`, `RF_Module_Own`), von allen Projekten über ihre lokalen Bibliothekstabellen eingebunden |
+| `kicad/archive/` | Alte Stände: FB-V1-Layout, erster FB-Schaltplan (D1 Mini, Mai 2026) |
 | `docs/` | Weitere Dokumentation, u.a. `base-station.md` |
 
 ---

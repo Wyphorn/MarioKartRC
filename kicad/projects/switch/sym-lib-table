@@ -1,0 +1,5 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "zzzz_Own") (type "KiCad") (uri "${KIPRJMOD}/../../libs/zzzz_Own.kicad_sym") (options "") (descr "Eigene Symbole Mario Kart RC"))
+	(lib (name "RF_Module_Own") (type "KiCad") (uri "${KIPRJMOD}/../../libs/RF_Module_Own.kicad_sym") (options "") (descr "ESP32-C6-Module"))
+)

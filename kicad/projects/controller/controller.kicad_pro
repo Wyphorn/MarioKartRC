@@ -39,9 +39,9 @@
         "other_text_thickness": 0.15,
         "other_text_upright": false,
         "pads": {
-          "drill": 0.8,
-          "height": 1.27,
-          "width": 1.27
+          "drill": 0.95,
+          "height": 1.95,
+          "width": 1.7
         },
         "silk_line_width": 0.1,
         "silk_text_italic": false,
@@ -61,42 +61,24 @@
           "hatch_smoothing_value": 0.1,
           "hatch_thickness": 1.0,
           "min_clearance": 0.5,
-          "min_island_area": 5.0,
+          "min_island_area": 10.0,
           "min_thickness": 0.25,
           "pad_connection": 1,
-          "remove_islands": 2,
+          "remove_islands": 0,
           "thermal_relief_gap": 0.5,
           "thermal_relief_spoke_width": 0.5
         }
       },
-      "diff_pair_dimensions": [],
+      "diff_pair_dimensions": [
+        {
+          "gap": 0.0,
+          "via_gap": 0.0,
+          "width": 0.0
+        }
+      ],
       "drc_exclusions": [
         [
-          "courtyards_overlap|85072000|58168000|be42267e-0dae-4cc7-960f-2667f5f83cbe|c2db1479-656a-4caa-8554-24bd3017eb69",
-          ""
-        ],
-        [
-          "courtyards_overlap|87752000|58175500|be42267e-0dae-4cc7-960f-2667f5f83cbe|f6c0b512-aded-4ec1-b6c9-15f3b4080338",
-          ""
-        ],
-        [
-          "courtyards_overlap|90472000|58168000|13bac5cc-6eaf-4054-ada3-5b60bdb66b7d|be42267e-0dae-4cc7-960f-2667f5f83cbe",
-          ""
-        ],
-        [
-          "isolated_copper|105348444|49166999|df6e5378-79b7-45b4-ad9a-8c3109a5e2a3|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "starved_thermal|113117000|45633000|59bb771d-760f-4675-8ed2-8eeaefb99928|046cd2f4-436c-467d-b880-340560b3a896|F.Cu",
-          ""
-        ],
-        [
-          "starved_thermal|113117000|58383000|59bb771d-760f-4675-8ed2-8eeaefb99928|4e75f4f8-7832-4a5a-baf9-a3155ef92115|F.Cu",
-          ""
-        ],
-        [
-          "starved_thermal|74117000|51000000|59bb771d-760f-4675-8ed2-8eeaefb99928|613ec500-db30-4b91-9dcb-54e0beb36350|F.Cu",
+          "starved_thermal|172750000|52500000|f7b38408-398c-4e1b-962d-8cabb8d8b191|b21bb208-d100-446f-b4e4-9ddc0829190d|F.Cu",
           ""
         ]
       ],
@@ -232,7 +214,9 @@
           "td_width_to_size_filter_ratio": 0.9
         }
       ],
-      "track_widths": [],
+      "track_widths": [
+        0.0
+      ],
       "tuning_pattern_settings": {
         "diff_pair_defaults": {
           "corner_radius_percentage": 80,
@@ -259,7 +243,12 @@
           "spacing": 0.6
         }
       },
-      "via_dimensions": [],
+      "via_dimensions": [
+        {
+          "diameter": 0.0,
+          "drill": 0.0
+        }
+      ],
       "zones_allow_external_fillets": false
     },
     "ipc2581": {
@@ -269,7 +258,7 @@
       "internal_id": "",
       "mfg": "",
       "mpn": "",
-      "sch_revision": "0.9"
+      "sch_revision": "2"
     },
     "layer_pairs": [],
     "layer_presets": [],
@@ -289,7 +278,48 @@
     "equivalence_files": []
   },
   "erc": {
-    "erc_exclusions": [],
+    "erc_exclusions": [
+      [
+        "lib_symbol_issues|431800|469900|05447af4-2a66-4888-808e-c4e21f3e32ed|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ],
+      [
+        "lib_symbol_issues|647700|990600|6e53164d-30ff-45fc-b97f-3f2b964d8c0d|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ],
+      [
+        "lib_symbol_mismatch|1117600|241300|3309d289-24fa-4d6e-b088-07a411f06dfd|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ],
+      [
+        "lib_symbol_mismatch|1130300|1498600|9df17313-d303-492a-9e7d-fa4f3c050b60|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ],
+      [
+        "lib_symbol_mismatch|2603500|863600|0164ed3c-af25-4335-b40d-ce4dac0d6786|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ],
+      [
+        "lib_symbol_mismatch|2616200|520700|84321a6d-f228-4a51-9563-6c70e881c16e|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ],
+      [
+        "lib_symbol_mismatch|330200|762000|b305eee1-d1a5-4e6b-9a78-9b8df6bbf9f3|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ],
+      [
+        "lib_symbol_mismatch|330200|914400|2f54bb67-671b-45e1-a5e5-6e5073e20db0|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ],
+      [
+        "lib_symbol_mismatch|520700|1422400|156aa10f-eca8-4c6d-9d1b-c02f15be4972|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ],
+      [
+        "lib_symbol_mismatch|520700|1612900|28f5d98f-44d5-4c07-b08e-cbc9e8eaa8b6|00000000-0000-0000-0000-000000000000|||",
+        ""
+      ]
+    ],
     "meta": {
       "version": 0
     },
@@ -535,11 +565,39 @@
         "pcb_color": "rgba(0, 0, 0, 0.000)",
         "priority": 2147483647,
         "schematic_color": "rgba(0, 0, 0, 0.000)",
-        "track_width": 0.2,
+        "track_width": 0.25,
         "tuning_profile": "",
         "via_diameter": 0.6,
         "via_drill": 0.3,
         "wire_width": 6
+      },
+      {
+        "clearance": 0.2,
+        "diff_pair_width": 0.2,
+        "microvia_diameter": 0.3,
+        "microvia_drill": 0.1,
+        "name": "Big Power",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "priority": 0,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "track_width": 1.0,
+        "tuning_profile": "",
+        "via_diameter": 0.6,
+        "via_drill": 0.3
+      },
+      {
+        "clearance": 0.2,
+        "diff_pair_width": 0.2,
+        "microvia_diameter": 0.3,
+        "microvia_drill": 0.1,
+        "name": "Power",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "priority": 1,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "track_width": 0.5,
+        "tuning_profile": "",
+        "via_diameter": 0.6,
+        "via_drill": 0.3
       }
     ],
     "meta": {
@@ -547,13 +605,30 @@
     },
     "net_colors": null,
     "netclass_assignments": null,
-    "netclass_patterns": []
+    "netclass_patterns": [
+      {
+        "netclass": "Power",
+        "pattern": "+BATT"
+      },
+      {
+        "netclass": "Power",
+        "pattern": "+3V3"
+      },
+      {
+        "netclass": "Power",
+        "pattern": "RUMBLE_SW"
+      },
+      {
+        "netclass": "Big Power",
+        "pattern": "+BATT"
+      }
+    ]
   },
   "pcbnew": {
     "last_paths": {
       "idf": "",
       "netlist": "",
-      "plot": "../gerber/controller/drill",
+      "plot": "",
       "specctra_dsn": "",
       "step": "",
       "vrml": ""
@@ -686,17 +761,17 @@
     "top_level_sheets": [
       {
         "filename": "controller.kicad_sch",
-        "name": "controller",
+        "name": "",
         "uuid": "31b31cb6-6220-4184-ac96-de210d33dd62"
       }
     ],
-    "used_designators": "",
+    "used_designators": "#FLG1-2,R1-22,SW1-3,C1-15,D1-2,#PWR1-63,Q1-3,U1-3,J1-10",
     "variants": []
   },
   "sheets": [
     [
       "31b31cb6-6220-4184-ac96-de210d33dd62",
-      "controller"
+      ""
     ]
   ],
   "text_variables": {},
