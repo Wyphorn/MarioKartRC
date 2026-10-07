@@ -95,6 +95,8 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 
 ## Merkposten für spätere Schritte
 
+- **Schalter-Platinchen V2 (Idee):** +BATT/MID/BATT_SW-Flächen unter Q1/Q2 auch auf B.Cu, mit Vias. Bestellte V1: Power-Flächen nur F.Cu, keine Vias (geprüft 2026-10-07). Nach Lieferung Fingertest an Q1 bei blockiertem Motor.
+
 - **Firmware `fb_v2` passt noch nicht zum V2-Schaltplan** (bekannt, steht in Memory project_status). **Maßgeblich ist das Layout/der Schaltplan, der Code wird angepasst** (User 2026-10-07): Tasten 14/15/18/19,
   I²C SDA 2, Display DC 3 / CS 4 / BL 5 / SCK 6 / MOSI 7. Wiki dokumentiert den Schaltplan. Tastenfarben/Stickachsen erst am Gerät.
 - Seite „Pannen und Lehren“ (Schritt 7) wird von Fernbedienung und Startseite schon verlinkt — Name beibehalten.
