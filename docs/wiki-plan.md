@@ -8,7 +8,7 @@ Status: ✅ fertig · 🔄 in Arbeit / in Durchsicht · ⏳ offen · ⏸ wartet 
 | # | Schritt | Status |
 |---|---|---|
 | 0 | Plan erstellen und vorstellen | ✅ |
-| 1 | Repo vorbereiten (aufräumen, Lizenz, Prüfung vor Veröffentlichung) | 🔄 Durchsicht |
+| 1 | Repo vorbereiten (aufräumen, Lizenz, Prüfung vor Veröffentlichung) | ✅ |
 | 2 | Repo öffentlich schalten, Wiki aktivieren, Wiki-Gerüst (Home, Sidebar, Footer) | ⏳ |
 | 3 | Bilder aus KiCad exportieren (Schaltpläne, Platinen, 3D-Renderings) | ⏳ |
 | 4 | Seite: Projektüberblick und Systemarchitektur (inkl. Protokoll) | ⏳ |
@@ -78,15 +78,19 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 - Unbenutzte Footprint-Entwürfe `SOT-223_5MC_MCH-L/-M` entfernt.
 - Firmware `car`, `car_v2`, `fb`, `fb_v2` baut.
 
-## Offen vor Schritt 2
+- Nach Durchsicht: AO4407A-3D-Modell gedreht (`rotate 0 0 -90`, per Render geprüft: Beinchen über Pads, Pin-1-Punkt auf Pad 1).
+- CLAUDE.md per `git filter-branch` aus der gesamten Historie entfernt, force-gepusht (30 Commits, neue Hashes).
+- Globale KiCad-Symboltabelle bereinigt (`zzzz_Own`, `RF_Module_Own`, `zz_own` raus; nur noch KiCad-Standard).
 
-- **CLAUDE.md steckt noch in der Git-Historie** (ältere Commits). Öffentlich wäre sie dort lesbar.
-  Abhilfe: Historie umschreiben (`git filter-repo`) und force-pushen. → User entscheidet.
-- Globale KiCad-Tabelle `~/.config/kicad/10.0/sym-lib-table` hat noch einen `zzzz_Own`-Eintrag mit `${KIPRJMOD}`;
-  harmlos (Projekttabelle hat Vorrang), kann bei Gelegenheit raus.
+## Merkposten für spätere Schritte
+
+- **Sounds (Schritt 11):** Die MP3/WAV-Dateien stammen aus dem Internet und werden **nicht** im Repo gehostet.
+  User sucht die Quelle, das Wiki verlinkt nur. Dazu eine **Mapping-Tabelle**: Quelldatei → Dateiname auf der SD-Karte →
+  Ordner (pro Charakter). Ordner der Sounds beim User erfragen. Bezug: Memory „SD-Ordner umbenennen“ und
+  README-Abschnitt „SD-Karte des DFPlayers“.
 
 ## Log
 
 - 2026-10-07: Plan erstellt. Vorab geprüft: Repo privat, Wiki aus, 28 Commits, keine Zugangsdaten
   in der Historie (`mk_secrets.h` nie committet), `kicad-cli` 10.0.6 vorhanden.
-- 2026-10-07: Schritt 1 umgesetzt (siehe oben), lokal committet, noch nicht gepusht.
+- 2026-10-07: Schritt 1 umgesetzt und mit User durchgesehen, Historie bereinigt, gepusht. Wartet auf GO für Schritt 2.
