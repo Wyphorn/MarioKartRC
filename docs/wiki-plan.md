@@ -18,8 +18,8 @@ Status: ✅ fertig · 🔄 in Arbeit / in Durchsicht · ⏳ offen · ⏸ wartet 
 | 7 | Seite: Pannen und Lehren (geflickte Platine, falsche Diode, Durchgeher, …) | ✅ |
 | 8 | Seite: Software Fernbedienung | ✅ |
 | 9 | Seite: Software Kart (inkl. OTA, DFPlayer/SD-Karte) | ✅ |
-| 10 | Seite: Strecke, IR-System, Basisstation (Planungsstand) | 🔄 Durchsicht |
-| 11 | Seite: Nachbauen (Stückliste, Bestellen, Flashen, Akku-Regeln) | ⏳ |
+| 10 | Seite: Strecke, IR-System, Basisstation (Planungsstand) | ✅ |
+| 11 | Seite: Nachbauen (Stückliste, Bestellen, Flashen, Akku-Regeln) | 🔄 Durchsicht, Sound-Quelle fehlt |
 | 12 | Fotos und Video einbinden | ⏸ User liefert |
 | 13 | README kürzen und aufs Wiki verweisen | ⏳ |
 | 14 | Optional: Blog / „Was letzte Woche geschah“ | ⏳ später |
@@ -96,7 +96,6 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 ## Merkposten für spätere Schritte
 
 - **Startsound des Karts:** behoben 2026-10-07 (DFPlayer-Reset vor den Selbsttests, Lautstärke + Sound danach). Gebaut (car, car_v2), **noch nicht geflasht/getestet** → Kart per OTA (`car_ota`) aktualisieren und prüfen, ob der Erkennungssound beim Kaltstart wieder kommt.
-- **Offene „(folgt)“-Verweise** beim Anlegen ersetzen: „Nachbauen“ (Kart-Board, Firmware-Kart, Sidebar).
 
 - **Schalter-Platinchen V2 (Idee):** +BATT/MID/BATT_SW-Flächen unter Q1/Q2 auch auf B.Cu, mit Vias. Bestellte V1: Power-Flächen nur F.Cu, keine Vias (geprüft 2026-10-07). Nach Lieferung Fingertest an Q1 bei blockiertem Motor.
 
@@ -133,3 +132,4 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 - 2026-10-07: Schritt 9: Seite „Firmware Kart“ online (Fahren, Tasten/Stern, SD-Layout, LEDs, Kollision, Akku, OTA-Anleitung, Envs, Offenes).
 - 2026-10-07: Schritt 9 abgenommen. Startsound im Wiki gestrichen, Heimnetz durch Platzhalter ersetzt (Wiki + platformio.ini).
 - 2026-10-07: Schritt 10: Seite „Strecke und IR-System“ online. Geklärt: −8/0/+8 cm = Sender am Auto, Empfänger im 5-cm-Raster (Vernier: max. 1 cm Abstand).
+- 2026-10-07: Schritt 11: Seite „Nachbauen“ online, Stücklisten-CSV unter docs/bom/ (Export im Skript). Offen: Sound-Quelle (User), Stand der Ordner in sounds/ (alt/kanonisch?), 09/003–006 Inhalt; 07=08 identisch, 03/04 nur je 2 verschiedene Dateien.

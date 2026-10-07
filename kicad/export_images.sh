@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exportiert die Bilder fürs Wiki aus den KiCad-Projekten nach docs/images/<board>/.
+# Exportiert Bilder und Stücklisten (docs/bom/) fürs Wiki aus den KiCad-Projekten nach docs/images/<board>/.
 #
 #   kicad/export_images.sh            alle Platinen (aktueller Stand + V1 aus der Git-Historie)
 #   kicad/export_images.sh kart       nur eine Platine
@@ -25,6 +25,13 @@ export_board() {   # <name> <projektordner> <basisname>
       kicad-cli sch export svg -o "$dst" "$base.kicad_sch" >/dev/null
       mv "$dst/$base.svg" "$dst/schematic.svg"
       kicad-cli sch export pdf -o "$dst/schematic.pdf" "$base.kicad_sch" >/dev/null
+      if [[ $name != *_v1 ]]; then
+          mkdir -p "$ROOT/docs/bom"
+          kicad-cli sch export bom --exclude-dnp \
+              --fields 'Reference,Value,Footprint,${QUANTITY},MPN,Manufacturer' \
+              --labels 'Referenz,Wert,Footprint,Anzahl,Bestellnummer,Hersteller' \
+              --group-by 'Value,Footprint' -o "$ROOT/docs/bom/$name.csv" "$base.kicad_sch" >/dev/null
+      fi
 
       local tmp; tmp=$(mktemp -d)
       kicad-cli pcb export svg --mode-single --page-size-mode 2 --exclude-drawing-sheet \
