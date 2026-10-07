@@ -10,7 +10,7 @@ Status: ✅ fertig · 🔄 in Arbeit / in Durchsicht · ⏳ offen · ⏸ wartet 
 | 0 | Plan erstellen und vorstellen | ✅ |
 | 1 | Repo vorbereiten (aufräumen, Lizenz, Prüfung vor Veröffentlichung) | ✅ |
 | 2 | Repo öffentlich schalten, Wiki aktivieren, Wiki-Gerüst (Home, Sidebar, Footer) | ✅ |
-| 3 | Bilder aus KiCad exportieren (Schaltpläne, Platinen, 3D-Renderings) | 🔄 Durchsicht |
+| 3 | Bilder aus KiCad exportieren (Schaltpläne, Platinen, 3D-Renderings) | ✅ |
 | 4 | Seite: Projektüberblick und Systemarchitektur (inkl. Protokoll) | ⏳ |
 | 5 | Seiten: Hardware Fernbedienung | ⏳ |
 | 6 | Seiten: Hardware Kart (Kart-Board + Schalter-Platinchen) | ⏳ |
@@ -109,3 +109,4 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 - 2026-10-07: Repo öffentlich, Wiki aktiviert, Beschreibung + Topics gesetzt. Gerüst (Home, _Sidebar, _Footer) als Entwurf im Scratchpad; Push sobald User die erste Wiki-Seite angelegt hat.
 - 2026-10-07: Schritt 2 fertig. Wiki-Gerüst gepusht (Home, _Sidebar, _Footer). User: Startseite evtl. zu viel Info, vorerst so lassen. Leser duzen.
 - 2026-10-07: Schritt 3 umgesetzt, Bilder + Skript gepusht, wartet auf Durchsicht.
+- 2026-10-07: Schritt 3 abgenommen (Zoom/Anschnitt bleibt so, Renderings sind Beiwerk).
