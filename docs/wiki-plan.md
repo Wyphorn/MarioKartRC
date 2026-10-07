@@ -13,7 +13,7 @@ Status: ✅ fertig · 🔄 in Arbeit / in Durchsicht · ⏳ offen · ⏸ wartet 
 | 3 | Bilder aus KiCad exportieren (Schaltpläne, Platinen, 3D-Renderings) | ✅ |
 | 4 | Seite: Projektüberblick und Systemarchitektur (inkl. Protokoll) | ✅ |
 | 4b | Seite: Spielmodi (Rennen + Items, Hunter, Ideen wie Capture the Flag) | ✅ |
-| 5 | Seiten: Hardware Fernbedienung | 🔄 Durchsicht |
+| 5 | Seiten: Hardware Fernbedienung | ✅ |
 | 6 | Seiten: Hardware Kart (Kart-Board + Schalter-Platinchen) | ⏳ |
 | 7 | Seite: Pannen und Lehren (geflickte Platine, falsche Diode, Durchgeher, …) | ⏳ |
 | 8 | Seite: Software Fernbedienung | ⏳ |
@@ -95,7 +95,7 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 
 ## Merkposten für spätere Schritte
 
-- **Firmware `fb_v2` passt noch nicht zum V2-Schaltplan** (bekannt, steht in Memory project_status): Tasten 14/15/18/19,
+- **Firmware `fb_v2` passt noch nicht zum V2-Schaltplan** (bekannt, steht in Memory project_status). **Maßgeblich ist das Layout/der Schaltplan, der Code wird angepasst** (User 2026-10-07): Tasten 14/15/18/19,
   I²C SDA 2, Display DC 3 / CS 4 / BL 5 / SCK 6 / MOSI 7. Wiki dokumentiert den Schaltplan. Tastenfarben/Stickachsen erst am Gerät.
 - Seite „Pannen und Lehren“ (Schritt 7) wird von Fernbedienung und Startseite schon verlinkt — Name beibehalten.
 
@@ -119,3 +119,4 @@ Home                         – kurz: was, warum, Status, KI-Hinweis
 - 2026-10-07: Schritt 4: Seite „Systemüberblick“ (Bausteine, ESP-NOW, Modi mit Mermaid-Diagrammen, Koppeln, Pakettabelle, Jäger-Modus). Sidebar verlinkt.
 - 2026-10-07: Neue Seite „Spielmodi“ (User-Wunsch): Items und Hunter aus dem Systemüberblick ausgelagert, Capture the Flag als Idee.
 - 2026-10-07: Schritt 4/4b abgenommen. Schritt 5: Seiten „Fernbedienung“ (V2, mit V1-Problemtabelle) und „Tasterplatine“ online.
+- 2026-10-07: Schritt 5 abgenommen.
