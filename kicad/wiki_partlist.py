@@ -109,7 +109,7 @@ ROWS = {
     ('R18 R19 R20 R21', 'Pull-ups der vier Tasten', ''),
     ('D1', 'Status-LED', ''),
     ('R6', 'Serienwiderstand LED-Daten', ''),
-    ('J9', 'Ausgang LED-Kette (weitere WS2812B)', ''),
+    ('J9', 'Ausgang LED-Kette: reserviert für weitere WS2812B, z. B. indirekte Beleuchtung des Gehäuses', ''),
     ('Q2', 'Schalter Rumble-Motoren', ''),
     ('R3', 'Basiswiderstand Q2', ''),
     ('R7', 'Basis-Pulldown Q2', ''),
