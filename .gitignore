@@ -29,3 +29,6 @@ shared/mk_secrets.h
 
 # Sound-Dateien (aus dem Internet, nicht selbst gehostet) – Mapping-Tabelle im Wiki
 sounds/
+
+# Videos/Fotos: werden über die Wiki-Weboberfläche hochgeladen, nicht ins Repo
+video/
