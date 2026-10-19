@@ -1,6 +1,6 @@
 # Mario Kart RC
 
-Mario-Kart-inspiriertes RC-Rennsystem für 8 Fahrzeuge im Außeneinsatz. Die Autos fahren mit ~30 km/h; Items, Kollisionen und Rundenzählung werden automatisch erkannt.
+Mario-Kart-inspiriertes RC-Rennsystem für 8 Fahrzeuge im Außeneinsatz. Die Autos fahren mit ~20 km/h; Items, Kollisionen und Rundenzählung werden automatisch erkannt.
 
 Das Projekt ist auf Nachbau ausgelegt: Alle Bauteile haben eine feste Bestellnummer eines echten Herstellers mit öffentlichem Datenblatt und sind handlötbar (SOT-23, SOT-223, SMA, THT – kein QFN).
 
@@ -306,7 +306,7 @@ Die Revision zeigt `esptool.py chip_id` an.
 
 **Weg eines Ereignisses:** Auto fährt über eine Bodenplatte → TSOP38238 erkennt die IR-ID → STM32 → CAN → RPi 5 → Spiellogik.
 
-Pro Tor sitzen drei Empfänger (Mitte und ±8 cm) passend zu den drei IR-LEDs am Auto. Bei 30 km/h bleibt ein Erkennungsfenster von ~5 ms.
+Pro Tor sitzen drei Empfänger (Mitte und ±8 cm) passend zu den drei IR-LEDs am Auto. Bei 20 km/h bleibt ein Erkennungsfenster von ~8 ms.
 
 ---
 
