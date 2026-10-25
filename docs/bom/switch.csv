@@ -12,7 +12,7 @@
 "J3","KartCon","Connector_Wire:SolderWire-0.75sqmm_1x02_P4.8mm_D1.25mm_OD2.3mm","1","",""
 "J4","WS2812b","Connector_PinHeader_2.54mm:PinHeader_1x03_P2.54mm_Vertical","1","",""
 "J5","2S Lipo","Connector_Wire:SolderWire-0.75sqmm_1x02_P4.8mm_D1.25mm_OD2.3mm","1","",""
-"J6","Motor_Driver","Connector_PinHeader_2.54mm:PinHeader_2x04_P2.54mm_Vertical","1","",""
+"J6","Motor_Driver","Connector_PinSocket_2.54mm:PinSocket_2x04_P2.54mm_Vertical","1","",""
 "Q1,Q2","AO4407A","zzzz_Own:SOIC-8_L4.9-W3.9-P1.27-LS6.0-BL","2","AO4407A","AOS"
 "R1","100k","Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder","1","",""
 "SW1","SW_DP3T","zzzz_Own:SW_Slide_2P3T_8pin_P2.0mm_MountingLugs","1","",""

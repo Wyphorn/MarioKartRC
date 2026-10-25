@@ -4930,7 +4930,7 @@
 		)
 		(uuid "8da8062f-880b-4ba5-998f-0e0b57bec9f4")
 	)
-	(label "LPWM"
+	(label "RPWM"
 		(at 173.99 92.71 0)
 		(effects
 			(font
@@ -4960,7 +4960,7 @@
 		)
 		(uuid "9f5469c2-5bec-43d1-8b30-38a9b8d3005e")
 	)
-	(label "RPWM"
+	(label "LPWM"
 		(at 161.29 92.71 180)
 		(effects
 			(font
@@ -6128,7 +6128,7 @@
 		)
 	)
 	(symbol
-		(lib_id "power:GND")
+		(lib_id "power:+5V")
 		(at 173.99 85.09 90)
 		(unit 1)
 		(body_style 1)
@@ -6150,7 +6150,7 @@
 				)
 			)
 		)
-		(property "Value" "GND"
+		(property "Value" "+5V"
 			(at 177.8 85.0899 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -7892,7 +7892,7 @@
 		)
 	)
 	(symbol
-		(lib_id "power:+5V")
+		(lib_id "power:GND")
 		(at 161.29 85.09 90)
 		(unit 1)
 		(body_style 1)
@@ -7914,7 +7914,7 @@
 				)
 			)
 		)
-		(property "Value" "+5V"
+		(property "Value" "GND"
 			(at 157.48 85.0899 90)
 			(show_name no)
 			(do_not_autoplace no)
@@ -8643,7 +8643,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_2x04_P2.54mm_Vertical"
+		(property "Footprint" "Connector_PinSocket_2.54mm:PinSocket_2x04_P2.54mm_Vertical"
 			(at 166.37 87.63 0)
 			(hide yes)
 			(show_name no)
